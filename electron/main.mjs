@@ -19,6 +19,7 @@ const bundledBackendExe = path.join(
   bundledBackendDir,
   process.platform === "win32" ? "prompt-backend.exe" : "prompt-backend"
 )
+const windowIcon = path.join(projectDir, "desktop-assets", "icon.ico")
 const childProcesses = []
 
 let mainWindow = null
@@ -162,6 +163,7 @@ function createWindow() {
     minWidth: 1120,
     minHeight: 720,
     backgroundColor: "#0a0a0a",
+    icon: fs.existsSync(windowIcon) ? windowIcon : undefined,
     title: "提示词中心",
     webPreferences: {
       contextIsolation: true,

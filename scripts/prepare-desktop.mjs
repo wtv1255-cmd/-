@@ -84,6 +84,10 @@ fs.rmSync(stagingDir, { recursive: true, force: true })
 fs.mkdirSync(stagingDir, { recursive: true })
 const standaloneTargetDir = path.join(stagingDir, ".next", "standalone")
 copyDir(path.join(projectDir, "electron"), path.join(stagingDir, "electron"))
+copyDir(
+  path.join(projectDir, "desktop-assets"),
+  path.join(stagingDir, "desktop-assets")
+)
 copyDir(path.join(projectDir, ".next", "standalone"), standaloneTargetDir)
 const standaloneServerDir = findStandaloneServerDir(standaloneTargetDir)
 copyDir(
@@ -112,6 +116,10 @@ fs.writeFileSync(
         appId: "local.prompt-center",
         productName: "提示词中心",
         electronVersion: "39.8.10",
+        icon: "desktop-assets/icon.ico",
+        win: {
+          icon: "desktop-assets/icon.ico",
+        },
         asar: false,
         npmRebuild: false,
         files: ["**/*"],

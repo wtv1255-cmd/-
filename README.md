@@ -7,7 +7,7 @@
 桌面端：
 
 ```text
-dist-desktop\提示词中心 0.0.1.exe
+dist-desktop\win-unpacked\提示词中心.exe
 ```
 
 桌面程序会自动启动真实提示词后端和本地 Next 前端，关闭窗口时会清理它自己启动的进程。

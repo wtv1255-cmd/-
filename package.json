@@ -10,7 +10,7 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "desktop": "electron electron/main.mjs",
-    "desktop:build": "node scripts/prepare-desktop.mjs && electron-builder --projectDir .desktop-app --win portable",
+    "desktop:build": "node scripts/prepare-desktop.mjs && electron-builder --projectDir .desktop-app --win dir",
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
