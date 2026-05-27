@@ -135,9 +135,7 @@ export function PromptDetailDialog({
                         prompt={prompt}
                         className="h-72 rounded-lg border"
                         label={prompt.coverUrl ? "封面图片" : "图片样例暂缺"}
-                        onDoubleClick={
-                          previewUrl ? openImagePreview : undefined
-                        }
+                        onPreview={previewUrl ? openImagePreview : undefined}
                       />
                       {prompt.preview ? (
                         <pre className="max-h-72 overflow-auto rounded-lg border bg-muted p-3 text-xs leading-6 whitespace-pre-wrap text-muted-foreground">
@@ -198,7 +196,7 @@ export function PromptDetailDialog({
                 prompt={prompt}
                 className="h-44 rounded-lg border"
                 label={`${getCategoryLabel(prompt.category)} · ${getPromptSourceLabel(prompt)}`}
-                onDoubleClick={previewUrl ? openImagePreview : undefined}
+                onPreview={previewUrl ? openImagePreview : undefined}
               />
               <div className="grid gap-2 rounded-lg border bg-muted p-3">
                 <div className="text-sm font-medium">标签</div>
@@ -261,7 +259,9 @@ export function PromptDetailDialog({
           <img
             src={previewUrl}
             alt={prompt.title}
-            className="max-h-[92svh] max-w-[92vw] object-contain"
+            className="max-h-[92svh] max-w-[92vw] cursor-zoom-out object-contain"
+            onClick={() => setPreviewOpen(false)}
+            title="点击缩小"
           />
         </div>
       ) : null}

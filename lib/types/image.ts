@@ -22,6 +22,8 @@ export type ImageSettings = {
   apiKey: string
 }
 
+export const DEFAULT_CODEX_PROXY_API_BASE = "https://laodeng.chat/v1"
+
 export type ImageStylePreset = {
   id: string
   label: string
@@ -237,6 +239,6 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   background: "auto",
   upscale: "",
   count: 1,
-  apiBaseUrl: "",
+  apiBaseUrl: DEFAULT_CODEX_PROXY_API_BASE,
   apiKey: "",
 }

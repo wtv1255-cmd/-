@@ -3,6 +3,14 @@
 import * as React from "react"
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes"
 
+declare global {
+  interface Window {
+    promptCenterDesktop?: {
+      setTheme: (theme: "light" | "dark") => void
+    }
+  }
+}
+
 function ThemeProvider({
   children,
   ...props
@@ -16,6 +24,7 @@ function ThemeProvider({
       {...props}
     >
       <ThemeHotkey />
+      <DesktopThemeBridge />
       {children}
     </NextThemesProvider>
   )
@@ -64,6 +73,18 @@ function ThemeHotkey() {
       window.removeEventListener("keydown", onKeyDown)
     }
   }, [resolvedTheme, setTheme])
+
+  return null
+}
+
+function DesktopThemeBridge() {
+  const { resolvedTheme } = useTheme()
+
+  React.useEffect(() => {
+    window.promptCenterDesktop?.setTheme(
+      resolvedTheme === "light" ? "light" : "dark"
+    )
+  }, [resolvedTheme])
 
   return null
 }

@@ -1,4 +1,11 @@
-import { app, BrowserWindow, dialog, shell } from "electron"
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+} from "electron"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
@@ -20,9 +27,21 @@ const bundledBackendExe = path.join(
   process.platform === "win32" ? "prompt-backend.exe" : "prompt-backend"
 )
 const windowIcon = path.join(projectDir, "desktop-assets", "icon.ico")
+const preloadPath = path.join(projectDir, "electron", "preload.cjs")
 const childProcesses = []
 
 let mainWindow = null
+
+nativeTheme.themeSource = "dark"
+
+function applyWindowTheme(theme) {
+  const resolvedTheme = theme === "light" ? "light" : "dark"
+  nativeTheme.themeSource = resolvedTheme
+}
+
+ipcMain.on("prompt-center:set-theme", (_event, theme) => {
+  applyWindowTheme(theme)
+})
 
 function logStartup(message) {
   try {
@@ -168,6 +187,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: fs.existsSync(preloadPath) ? preloadPath : undefined,
       sandbox: true,
     },
   })

@@ -51,6 +51,7 @@ import {
 import {
   DEFAULT_NEGATIVE_PROMPT_SUFFIX,
   DEFAULT_IMAGE_SETTINGS,
+  DEFAULT_CODEX_PROXY_API_BASE,
   IMAGE_BACKGROUND_OPTIONS,
   IMAGE_FORMAT_OPTIONS,
   IMAGE_MODELS,
@@ -152,7 +153,13 @@ export function ImageWorkbench() {
     try {
       const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
       if (!saved) return
-      setSettings({ ...DEFAULT_IMAGE_SETTINGS, ...JSON.parse(saved) })
+      const parsed = JSON.parse(saved) as Partial<ImageSettings>
+      setSettings({
+        ...DEFAULT_IMAGE_SETTINGS,
+        ...parsed,
+        apiBaseUrl:
+          parsed.apiBaseUrl?.trim() || DEFAULT_IMAGE_SETTINGS.apiBaseUrl,
+      })
     } catch {
       setSettings(DEFAULT_IMAGE_SETTINGS)
     }
@@ -519,7 +526,8 @@ export function ImageWorkbench() {
   const saveApiSettings = (apiBaseUrl: string, apiKey: string) => {
     setSettings((current) => ({
       ...current,
-      apiBaseUrl: apiBaseUrl.trim().replace(/\/+$/, ""),
+      apiBaseUrl:
+        apiBaseUrl.trim().replace(/\/+$/, "") || DEFAULT_CODEX_PROXY_API_BASE,
       apiKey: apiKey.trim(),
     }))
     setApiSettingsOpen(false)
@@ -527,7 +535,11 @@ export function ImageWorkbench() {
   }
 
   const clearApiSettings = () => {
-    setSettings((current) => ({ ...current, apiBaseUrl: "", apiKey: "" }))
+    setSettings((current) => ({
+      ...current,
+      apiBaseUrl: DEFAULT_CODEX_PROXY_API_BASE,
+      apiKey: "",
+    }))
     setApiSettingsOpen(false)
     showToast("API 地址和 Key 已清空")
   }
@@ -1314,7 +1326,8 @@ function SettingsPanel({
             type="number"
             min={1}
             max={10}
-            value={settings.count}
+            value={settings.count > 4 ? settings.count : ""}
+            placeholder="自定"
             onChange={(event) =>
               onSettingChange(
                 "count",
@@ -1409,7 +1422,7 @@ function ApiSettingsDialog({
               value={draftBaseUrl}
               onChange={(event) => setDraftBaseUrl(event.target.value)}
               className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
-              placeholder="例如：https://你的接口地址"
+              placeholder="例如：https://laodeng.chat/v1"
             />
           </label>
 
@@ -1425,9 +1438,9 @@ function ApiSettingsDialog({
           </label>
 
           <div className="rounded-lg border bg-muted p-3 text-xs leading-5 text-muted-foreground">
-            生图会请求：API 地址 +{" "}
-            <span className="font-mono">/v1/images/generations</span> 或{" "}
-            <span className="font-mono">/v1/images/edits</span>。
+            建议填写到 <span className="font-mono">/v1</span>，例如{" "}
+            <span className="font-mono">https://laodeng.chat/v1</span>
+            。如果只填域名，程序也会自动补齐。
           </div>
         </div>
 
@@ -1628,8 +1641,8 @@ function ResultCard({
     <article className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-900">
       <div
         className="grid aspect-square cursor-zoom-in place-items-center bg-black"
-        onDoubleClick={() => onPreview(image)}
-        title="双击放大"
+        onClick={() => onPreview(image)}
+        title="点击放大"
       >
         <img
           src={image.url}
@@ -1765,7 +1778,7 @@ function GalleryCard({
     <article className="overflow-hidden rounded-md border bg-background">
       <div
         className="grid aspect-square cursor-zoom-in place-items-center bg-black"
-        onDoubleClick={() => {
+        onClick={() => {
           if (!url) return
           onPreview({
             url,
@@ -1773,7 +1786,7 @@ function GalleryCard({
             subtitle: `${card.width}x${card.height} · ${formatBytes(card.bytes)}`,
           })
         }}
-        title="双击放大"
+        title="点击放大"
       >
         {url ? (
           <img
@@ -1896,7 +1909,9 @@ function ImagePreviewDialog({
         <img
           src={preview.url}
           alt={preview.title}
-          className="max-h-[calc(100svh-7rem)] max-w-full object-contain"
+          className="max-h-[calc(100svh-7rem)] max-w-full cursor-zoom-out object-contain"
+          onClick={onClose}
+          title="点击缩小"
         />
       </div>
     </div>

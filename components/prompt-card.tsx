@@ -15,12 +15,12 @@ export function PromptVisual({
   prompt,
   className,
   label,
-  onDoubleClick,
+  onPreview,
 }: {
   prompt: Prompt
   className?: string
   label?: string | null
-  onDoubleClick?: () => void
+  onPreview?: () => void
 }) {
   const resolvedLabel =
     label === undefined
@@ -31,11 +31,11 @@ export function PromptVisual({
     <div
       className={cn(
         "relative overflow-hidden border-b bg-slate-100 dark:bg-zinc-900",
-        onDoubleClick && "cursor-zoom-in",
+        onPreview && "cursor-zoom-in",
         className
       )}
-      onDoubleClick={onDoubleClick}
-      title={onDoubleClick ? "双击放大" : undefined}
+      onClick={onPreview}
+      title={onPreview ? "点击放大" : undefined}
     >
       {prompt.coverUrl ? (
         <img

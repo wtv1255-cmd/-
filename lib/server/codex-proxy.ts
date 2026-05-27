@@ -19,6 +19,13 @@ function normalizeBaseUrl(value: unknown) {
   return baseUrl
 }
 
+function buildCodexUrl(apiBaseUrl: string, path: string) {
+  if (apiBaseUrl.endsWith("/v1") && path.startsWith("/v1/")) {
+    return `${apiBaseUrl}${path.slice(3)}`
+  }
+  return `${apiBaseUrl}${path}`
+}
+
 function readApiKey(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
 }
@@ -98,7 +105,7 @@ export async function forwardCodexImageJson(
     )
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(buildCodexUrl(apiBaseUrl, path), {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -134,7 +141,7 @@ export async function forwardCodexImageForm(
     )
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(buildCodexUrl(apiBaseUrl, path), {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -169,7 +176,7 @@ export async function forwardCodexChatJson(
     )
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(buildCodexUrl(apiBaseUrl, path), {
     method: "POST",
     headers: {
       Accept: "application/json",

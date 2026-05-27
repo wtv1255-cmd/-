@@ -107,43 +107,84 @@ function buildPayload({
   }
 }
 
-export async function requestImageGeneration(input: RequestImagesInput) {
-  const response = await fetch("/api/codex/images/generations", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(buildPayload(input)),
-    signal: input.signal,
-  })
+function clampImageCount(value: number) {
+  return Math.max(1, Math.min(10, Math.floor(Math.abs(Number(value)) || 1)))
+}
 
-  return parseImageResponse(response)
+async function collectRepeatedImages(
+  count: number,
+  requestOne: () => Promise<CodexImageResult[]>
+) {
+  const jobs = Array.from({ length: count }, () => requestOne())
+  const settled = await Promise.allSettled(jobs)
+  const images = settled.flatMap((item) =>
+    item.status === "fulfilled" ? item.value : []
+  )
+
+  if (images.length) return images.slice(0, count)
+
+  const firstError = settled.find(
+    (item): item is PromiseRejectedResult => item.status === "rejected"
+  )
+  throw firstError?.reason instanceof Error
+    ? firstError.reason
+    : new Error("生成失败")
+}
+
+export async function requestImageGeneration(input: RequestImagesInput) {
+  const count = clampImageCount(input.settings.count)
+
+  return collectRepeatedImages(count, async () => {
+    const response = await fetch("/api/codex/images/generations", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        buildPayload({
+          ...input,
+          settings: { ...input.settings, count: 1 },
+        })
+      ),
+      signal: input.signal,
+    })
+
+    return parseImageResponse(response)
+  })
 }
 
 export async function requestImageEdit(input: RequestImagesInput) {
-  const formData = new FormData()
-  const payload = buildPayload(input)
+  const count = clampImageCount(input.settings.count)
 
-  Object.entries(payload).forEach(([key, value]) => {
-    if (value !== undefined && value !== null) formData.set(key, String(value))
-  })
-  ;(input.references || []).forEach((reference) => {
-    formData.append(
-      "image",
-      reference.file,
-      reference.name || reference.file.name || "reference.png"
-    )
-  })
+  return collectRepeatedImages(count, async () => {
+    const formData = new FormData()
+    const payload = buildPayload({
+      ...input,
+      settings: { ...input.settings, count: 1 },
+    })
 
-  const response = await fetch("/api/codex/images/edits", {
-    method: "POST",
-    headers: { Accept: "application/json" },
-    body: formData,
-    signal: input.signal,
-  })
+    Object.entries(payload).forEach(([key, value]) => {
+      if (value !== undefined && value !== null)
+        formData.set(key, String(value))
+    })
+    ;(input.references || []).forEach((reference) => {
+      formData.append(
+        "image",
+        reference.file,
+        reference.name || reference.file.name || "reference.png"
+      )
+    })
 
-  return parseImageResponse(response)
+    const response = await fetch("/api/codex/images/edits", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: formData,
+      signal: input.signal,
+    })
+
+    return parseImageResponse(response)
+  })
 }
 
 export async function requestPromptReverse(input: ReversePromptInput) {
