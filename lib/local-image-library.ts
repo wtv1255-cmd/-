@@ -134,10 +134,36 @@ export async function imageSourceToBlob(image: { dataUrl?: string; url?: string;
   const source = image.dataUrl || image.url
   if (!source) throw new Error("图片地址为空")
 
+  if (source.startsWith("data:")) {
+    return dataUrlToBlob(source, image.mimeType)
+  }
+
   const response = await fetch(source)
+  if (!response.ok) throw new Error("读取图片失败")
   const blob = await response.blob()
   if (blob.type || !image.mimeType) return blob
   return new Blob([blob], { type: image.mimeType })
+}
+
+function dataUrlToBlob(dataUrl: string, fallbackMimeType = "") {
+  const commaIndex = dataUrl.indexOf(",")
+  if (commaIndex < 0) throw new Error("图片数据异常")
+
+  const meta = dataUrl.slice(0, commaIndex)
+  const body = dataUrl.slice(commaIndex + 1)
+  const mimeType =
+    /^data:([^;,]+)/.exec(meta)?.[1] || fallbackMimeType || "image/png"
+
+  if (!meta.includes(";base64")) {
+    return new Blob([decodeURIComponent(body)], { type: mimeType })
+  }
+
+  const binary = atob(body)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new Blob([bytes], { type: mimeType })
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

@@ -274,51 +274,78 @@ export function ImageWorkbench() {
   const generateImages = async () => {
     const startedAt = performance.now()
     const controller = new AbortController()
+    const pendingResults = Array.from({ length: generationCount }, () => ({
+      id: crypto.randomUUID(),
+      status: "pending" as const,
+    }))
+    let successCount = 0
+    let failedCount = 0
+    let firstError = ""
+
     setIsRunning(true)
-    setResults(
-      Array.from({ length: generationCount }, () => ({
-        id: crypto.randomUUID(),
-        status: "pending",
-      }))
+    setResults(pendingResults)
+
+    await Promise.all(
+      pendingResults.map(async (slot) => {
+        try {
+          const images =
+            mode === "edit"
+              ? await requestImageEdit({
+                  prompt,
+                  style,
+                  negativePrompt,
+                  settings: { ...settings, count: 1 },
+                  references,
+                  signal: controller.signal,
+                })
+              : await requestImageGeneration({
+                  prompt,
+                  style,
+                  negativePrompt,
+                  settings: { ...settings, count: 1 },
+                  signal: controller.signal,
+                })
+
+          const image = images[0]
+          if (!image) throw new Error("接口没有返回图片")
+
+          const generated = await imageResultToGeneratedImage(
+            image,
+            performance.now() - startedAt
+          )
+          successCount += 1
+          setResults((current) =>
+            current.map((item) =>
+              item.id === slot.id
+                ? { id: slot.id, status: "success", image: generated }
+                : item
+            )
+          )
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "生成失败"
+          failedCount += 1
+          if (!firstError) firstError = message
+          setResults((current) =>
+            current.map((item) =>
+              item.id === slot.id
+                ? { id: slot.id, status: "failed", error: message }
+                : item
+            )
+          )
+        }
+      })
     )
 
-    try {
-      const images =
-        mode === "edit"
-          ? await requestImageEdit({
-              prompt,
-              style,
-              negativePrompt,
-              settings: { ...settings, count: generationCount },
-              references,
-              signal: controller.signal,
-            })
-          : await requestImageGeneration({
-              prompt,
-              style,
-              negativePrompt,
-              settings: { ...settings, count: generationCount },
-              signal: controller.signal,
-            })
-
-      const generated = await Promise.all(
-        images.map((image) =>
-          imageResultToGeneratedImage(image, performance.now() - startedAt)
-        )
+    if (successCount) {
+      showToast(
+        failedCount
+          ? `已生成 ${successCount} 张图片，${failedCount} 张失败`
+          : `已生成 ${successCount} 张图片`
       )
-      setResults(
-        generated.map((image) => ({ id: image.id, status: "success", image }))
-      )
-      showToast(`已生成 ${generated.length} 张图片`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "生成失败"
-      setResults([
-        { id: crypto.randomUUID(), status: "failed", error: message },
-      ])
-      showToast(message)
-    } finally {
-      setIsRunning(false)
+    } else {
+      showToast(firstError || "生成失败")
     }
+    setIsRunning(false)
   }
 
   const reversePrompt = async () => {
