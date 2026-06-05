@@ -92,6 +92,12 @@ const LEGACY_IMAGE_API_BASE_URLS = new Set([
   "https://laodeng.chat/v1",
   "https://ai.hybgzs.com/v1",
 ])
+const YANAI_PROMPT_PRESET_CATEGORIES = [
+  "形象建议",
+  "照片修复",
+  "写真风格",
+  "设计模板",
+]
 
 function normalizeImageModel(value: unknown) {
   if (typeof value !== "string") return DEFAULT_IMAGE_SETTINGS.model
@@ -1104,28 +1110,42 @@ export function ImageWorkbench() {
                     />
                   </label>
 
-                  <div className="grid gap-2">
+                  <div className="grid gap-3">
                     <div className="flex items-center gap-2 text-sm font-medium">
                       <Sparkles className="size-4" />
-                      快捷修图
+                      核心提示词
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {YANAI_IMAGE_PROMPT_PRESETS.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="min-h-16 rounded-md border bg-background px-3 py-2 text-left transition hover:bg-muted"
-                          onClick={() => applyPromptPreset(item)}
-                        >
-                          <span className="block text-xs font-medium text-foreground">
-                            {item.label}
-                          </span>
-                          <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
-                            {item.description}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
+                    {YANAI_PROMPT_PRESET_CATEGORIES.map((category) => {
+                      const items = YANAI_IMAGE_PROMPT_PRESETS.filter(
+                        (item) => item.category === category
+                      )
+                      if (!items.length) return null
+
+                      return (
+                        <section key={category} className="grid gap-2">
+                          <div className="text-xs font-medium text-muted-foreground">
+                            {category}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {items.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="min-h-16 rounded-md border bg-background px-3 py-2 text-left transition hover:bg-muted"
+                                onClick={() => applyPromptPreset(item)}
+                              >
+                                <span className="block text-xs font-medium text-foreground">
+                                  {item.label}
+                                </span>
+                                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
+                                  {item.description}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                      )
+                    })}
                   </div>
 
                   <label className="grid gap-2">
