@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	_ "embed"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/repository"
@@ -21,9 +24,14 @@ const (
 	youMindGptImage2RawBase      = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main"
 	youMindNanoBananaProRawBase  = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main"
 	davidWuGptImage2RawBase      = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main"
+	yanaiBananaPromptCategory    = "yanai-banana-prompts"
+	yanaiBananaPromptRawBase     = "https://raw.githubusercontent.com/glidea/banana-prompt-quicker/main"
 )
 
 var gptImage2CaseFiles = []string{"README.md", "cases/ad-creative.md", "cases/character.md", "cases/comparison.md", "cases/ecommerce.md", "cases/portrait.md", "cases/poster.md", "cases/ui.md"}
+
+//go:embed data/yanai_banana_prompts.json
+var yanaiBananaPromptJSON []byte
 
 type gptImage2Data struct {
 	Records []struct {
@@ -47,6 +55,23 @@ type davidWuGptImage2Prompt struct {
 	Source     string `json:"source"`
 	NeedsRef   bool   `json:"needs_ref"`
 	Image      string `json:"image"`
+}
+
+type yanaiBananaPrompt struct {
+	Title              string   `json:"title"`
+	Preview            string   `json:"preview"`
+	ReferenceImageURLs []string `json:"reference_image_urls"`
+	Prompt             string   `json:"prompt"`
+	Author             string   `json:"author"`
+	Link               string   `json:"link"`
+	Mode               string   `json:"mode"`
+	Category           string   `json:"category"`
+	SubCategory        string   `json:"sub_category"`
+	Created            string   `json:"created"`
+}
+
+type yanaiBananaPromptSnapshot struct {
+	Prompts []yanaiBananaPrompt `json:"prompts"`
 }
 
 func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
@@ -80,6 +105,8 @@ func buildPromptCategory(category string) ([]model.Prompt, error) {
 		return buildYouMindNanoBananaProPrompts()
 	case "davidwu-gpt-image2-prompts":
 		return buildDavidWuGptImage2Prompts()
+	case yanaiBananaPromptCategory:
+		return buildYanaiBananaPrompts()
 	}
 	return nil, errors.New("未知提示词分类")
 }
@@ -215,6 +242,47 @@ func buildDavidWuGptImage2Prompts() ([]model.Prompt, error) {
 	return items, nil
 }
 
+func buildYanaiBananaPrompts() ([]model.Prompt, error) {
+	cleanJSON := bytes.TrimPrefix(yanaiBananaPromptJSON, []byte{0xef, 0xbb, 0xbf})
+	data := []yanaiBananaPrompt{}
+	if err := json.Unmarshal(cleanJSON, &data); err != nil {
+		snapshot := yanaiBananaPromptSnapshot{}
+		if snapshotErr := json.Unmarshal(cleanJSON, &snapshot); snapshotErr != nil {
+			return nil, err
+		}
+		data = snapshot.Prompts
+	}
+
+	items := []model.Prompt{}
+	for _, item := range data {
+		title := strings.TrimSpace(item.Title)
+		prompt := strings.TrimSpace(item.Prompt)
+		if title == "" || prompt == "" {
+			continue
+		}
+
+		cover := yanaiBananaAssetURL(item.Preview)
+		references := []string{}
+		for _, reference := range item.ReferenceImageURLs {
+			if image := yanaiBananaAssetURL(reference); image != "" && image != cover {
+				references = append(references, image)
+			}
+		}
+
+		items = append(items, model.Prompt{
+			ID:        yanaiBananaPromptCategory + "-" + leftPad(len(items)+1),
+			Title:     title,
+			CoverURL:  cover,
+			Prompt:    prompt,
+			Tags:      yanaiBananaTags(item),
+			CreatedAt: strings.TrimSpace(item.Created),
+			UpdatedAt: strings.TrimSpace(item.Created),
+			Preview:   yanaiBananaPreview(item, cover, references),
+		})
+	}
+	return items, nil
+}
+
 func buildYouMindPrompts(baseURL, idPrefix, modelTag string) ([]model.Prompt, error) {
 	markdown, err := fetchText(baseURL, "README_zh.md")
 	if err != nil {
@@ -296,6 +364,55 @@ func davidWuGptImage2Preview(item davidWuGptImage2Prompt, image string) string {
 		lines = append(lines, "![]("+image+")")
 	}
 	return strings.Join(lines, "\n\n")
+}
+
+func yanaiBananaTags(item yanaiBananaPrompt) []string {
+	return uniqueTags([]string{
+		"yanai",
+		strings.TrimSpace(item.Category),
+		strings.TrimSpace(item.SubCategory),
+		strings.TrimSpace(item.Mode),
+		strings.TrimSpace(item.Author),
+	})
+}
+
+func uniqueTags(values []string) []string {
+	seen := map[string]bool{}
+	tags := []string{}
+	for _, value := range values {
+		tag := strings.TrimSpace(value)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
+}
+
+func yanaiBananaPreview(item yanaiBananaPrompt, cover string, references []string) string {
+	lines := []string{}
+	if item.Author != "" {
+		lines = append(lines, "作者："+strings.TrimSpace(item.Author))
+	}
+	if item.Link != "" {
+		lines = append(lines, "来源："+strings.TrimSpace(item.Link))
+	}
+	for _, image := range append([]string{cover}, references...) {
+		if image != "" {
+			lines = append(lines, "![]("+image+")")
+		}
+	}
+	return strings.Join(lines, "\n\n")
+}
+
+func yanaiBananaAssetURL(value string) string {
+	image := strings.TrimSpace(value)
+	if image == "" || strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
+		return image
+	}
+	image = strings.TrimPrefix(image, "/banana-prompt-quicker/")
+	return yanaiBananaPromptRawBase + "/" + strings.TrimLeft(strings.TrimPrefix(image, "."), "/")
 }
 
 func splitTags(value string, pattern string) []string {

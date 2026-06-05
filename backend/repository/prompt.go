@@ -27,6 +27,19 @@ func ListPromptCategories() ([]model.PromptCategory, error) {
 	return PromptCategories(), nil
 }
 
+// CountPromptCategory 返回指定分类当前入库数量。
+func CountPromptCategory(category string) (int64, error) {
+	db, err := DB()
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	if err := db.Model(&model.Prompt{}).Where("category = ?", category).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // ListPrompts 按查询条件返回提示词分页列表。
 func ListPrompts(q model.Query) ([]model.Prompt, int64, error) {
 	db, err := DB()

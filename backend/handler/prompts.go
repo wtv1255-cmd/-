@@ -34,7 +34,7 @@ func PromptSync(w http.ResponseWriter, r *http.Request) {
 	synced := []string{}
 
 	for _, item := range service.ListPromptCategories() {
-		if !item.Remote {
+		if !item.Remote && category != item.Category {
 			continue
 		}
 		if category != "" && item.Category != category {

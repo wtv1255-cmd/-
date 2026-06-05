@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   AlertCircle,
+  ChevronDown,
   Check,
   Copy,
   Database,
@@ -28,6 +29,8 @@ import {
   getCategoryLabel,
   getTagLabel,
   syncPromptSources,
+  YANAI_PROMPT_CATEGORY,
+  YANAI_PROMPT_PRIMARY_TAGS,
 } from "@/lib/api/prompts"
 import {
   IMAGE_SOURCE_PROMPT_STORAGE_KEY,
@@ -65,6 +68,8 @@ export default function Page() {
   const [selectOpen, setSelectOpen] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [toast, setToast] = useState("")
+  const [sourceCategoriesOpen, setSourceCategoriesOpen] = useState(true)
+  const [yanaiCategoriesOpen, setYanaiCategoriesOpen] = useState(true)
   const searchRef = useRef<HTMLInputElement>(null)
 
   const stats = usePromptStats()
@@ -84,6 +89,28 @@ export default function Page() {
       : promptList.categories.filter((item) => item !== ALL_PROMPTS_OPTION)
     return [ALL_PROMPTS_OPTION, ...values]
   }, [promptList.categories, stats.categories])
+
+  const sourceCategories = useMemo(
+    () => categories.filter((item) => item !== YANAI_PROMPT_CATEGORY),
+    [categories]
+  )
+
+  const yanaiPromptItems = useMemo(
+    () => stats.items.filter((item) => item.category === YANAI_PROMPT_CATEGORY),
+    [stats.items]
+  )
+
+  const yanaiTagCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const item of yanaiPromptItems) {
+      for (const tag of YANAI_PROMPT_PRIMARY_TAGS) {
+        if (item.tags?.includes(tag)) {
+          counts[tag] = (counts[tag] || 0) + 1
+        }
+      }
+    }
+    return counts
+  }, [yanaiPromptItems])
 
   const tags = useMemo(() => {
     const values =
@@ -182,6 +209,19 @@ export default function Page() {
     setPage(1)
   }
 
+  const selectSidebarCategory = (nextCategory: string) => {
+    setCategory(nextCategory)
+    setSelectedTags([])
+    resetPage()
+  }
+
+  const selectYanaiGroup = (tag?: string) => {
+    setCategory(YANAI_PROMPT_CATEGORY)
+    setSelectedTags(tag ? [tag] : [])
+    setSource("all")
+    resetPage()
+  }
+
   const syncPrompts = async () => {
     if (isSyncing) return
 
@@ -190,9 +230,7 @@ export default function Page() {
       const syncCategory =
         category === ALL_PROMPTS_OPTION ? undefined : category
       showToast(
-        syncCategory
-          ? "正在同步当前分类"
-          : "正在全量同步，通常需要 30-60 秒"
+        syncCategory ? "正在同步当前分类" : "正在全量同步，通常需要 30-60 秒"
       )
       const result = await syncPromptSources(syncCategory)
       stats.refresh()
@@ -257,45 +295,81 @@ export default function Page() {
         </div>
       </header>
 
-      <div className="grid min-h-[calc(100svh-3.5rem)] grid-cols-[232px_minmax(0,1fr)] max-xl:grid-cols-[220px_minmax(0,1fr)] max-lg:grid-cols-1">
+      <div className="grid min-h-[calc(100svh-3.5rem)] grid-cols-[260px_minmax(0,1fr)] max-xl:grid-cols-[240px_minmax(0,1fr)] max-lg:grid-cols-1">
         <aside className="overflow-auto border-r bg-background p-3 max-lg:border-r-0 max-lg:border-b">
-          <SectionTitle>分类</SectionTitle>
-          <nav className="grid gap-1">
-            {categories.map((item) => {
-              const active = category === item
-              const count =
-                item === ALL_PROMPTS_OPTION
-                  ? stats.total
-                  : stats.categoryCounts[item] || 0
-              return (
-                <button
-                  key={item}
-                  type="button"
-                  className={cn(
-                    "flex min-h-9 items-center justify-between gap-3 rounded-lg px-3 text-left text-sm",
-                    active
-                      ? "bg-muted font-medium"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                  onClick={() => {
-                    setCategory(item)
-                    resetPage()
-                  }}
-                >
-                  <span className="min-w-0 truncate">
-                    {item === ALL_PROMPTS_OPTION
-                      ? "全部提示词"
-                      : getCategoryLabel(item)}
-                  </span>
-                  <span className="font-mono text-xs">
-                    {stats.isLoading && item === ALL_PROMPTS_OPTION
+          <SidebarGroup
+            title="分类"
+            open={sourceCategoriesOpen}
+            onToggle={() => setSourceCategoriesOpen((value) => !value)}
+          >
+            <nav className="grid gap-1">
+              {sourceCategories.map((item) => {
+                const active = category === item
+                const count =
+                  item === ALL_PROMPTS_OPTION
+                    ? stats.total
+                    : stats.categoryCounts[item] || 0
+                return (
+                  <SidebarFilterButton
+                    key={item}
+                    active={active}
+                    label={
+                      item === ALL_PROMPTS_OPTION
+                        ? "全部提示词"
+                        : getCategoryLabel(item)
+                    }
+                    count={
+                      stats.isLoading && item === ALL_PROMPTS_OPTION
+                        ? "..."
+                        : count
+                    }
+                    onClick={() => selectSidebarCategory(item)}
+                  />
+                )
+              })}
+            </nav>
+          </SidebarGroup>
+
+          <div className="mt-4">
+            <SidebarGroup
+              title="YanAI 提示词"
+              count={
+                stats.isLoading
+                  ? "..."
+                  : stats.categoryCounts[YANAI_PROMPT_CATEGORY] || 0
+              }
+              open={yanaiCategoriesOpen}
+              onToggle={() => setYanaiCategoriesOpen((value) => !value)}
+            >
+              <nav className="grid gap-1">
+                <SidebarFilterButton
+                  active={
+                    category === YANAI_PROMPT_CATEGORY &&
+                    selectedTags.length === 0
+                  }
+                  label="全部 YanAI"
+                  count={
+                    stats.isLoading
                       ? "..."
-                      : count}
-                  </span>
-                </button>
-              )
-            })}
-          </nav>
+                      : stats.categoryCounts[YANAI_PROMPT_CATEGORY] || 0
+                  }
+                  onClick={() => selectYanaiGroup()}
+                />
+                {YANAI_PROMPT_PRIMARY_TAGS.map((tag) => (
+                  <SidebarFilterButton
+                    key={tag}
+                    active={
+                      category === YANAI_PROMPT_CATEGORY &&
+                      selectedTags.includes(tag)
+                    }
+                    label={getTagLabel(tag)}
+                    count={stats.isLoading ? "..." : yanaiTagCounts[tag] || 0}
+                    onClick={() => selectYanaiGroup(tag)}
+                  />
+                ))}
+              </nav>
+            </SidebarGroup>
+          </div>
 
           <div className="mt-6">
             <SectionTitle>来源</SectionTitle>
@@ -520,6 +594,70 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     <div className="mb-2 px-2 text-xs font-medium text-muted-foreground">
       {children}
     </div>
+  )
+}
+
+function SidebarGroup({
+  title,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string
+  count?: string | number
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        className="mb-2 flex h-8 w-full items-center justify-between gap-2 rounded-md px-2 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <ChevronDown
+            className={cn("size-3.5 transition", !open && "-rotate-90")}
+          />
+          <span className="truncate">{title}</span>
+        </span>
+        {count !== undefined ? (
+          <span className="font-mono text-[11px]">{count}</span>
+        ) : null}
+      </button>
+      {open ? children : null}
+    </div>
+  )
+}
+
+function SidebarFilterButton({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean
+  label: string
+  count: string | number
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex min-h-9 items-center justify-between gap-3 rounded-lg px-3 text-left text-sm",
+        active
+          ? "bg-muted font-medium"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+      )}
+      onClick={onClick}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="font-mono text-xs">{count}</span>
+    </button>
   )
 }
 

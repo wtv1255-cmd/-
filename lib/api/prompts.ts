@@ -14,6 +14,8 @@ type WrappedApiResponse<T> = {
 
 const PROMPT_API_PATH = "/api/prompts"
 export const PROMPT_BATCH_PAGE_SIZE = 500
+export const YANAI_PROMPT_CATEGORY = "yanai-banana-prompts"
+export const YANAI_PROMPT_PRIMARY_TAGS = ["工作", "生活", "有趣", "学习"]
 
 const CATEGORY_LABELS: Record<string, string> = {
   system: "系统",
@@ -23,6 +25,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   "youmind-gpt-image-2": "YouMind 图像提示词",
   "youmind-nano-banana-pro": "Nano Banana Pro 提示词",
   "davidwu-gpt-image2-prompts": "GPT Image2 提示词",
+  [YANAI_PROMPT_CATEGORY]: "YanAI 提示词",
 }
 
 const TAG_LABELS: Record<string, string> = {
@@ -85,6 +88,9 @@ const TAG_LABELS: Record<string, string> = {
   social_dance: "社交舞蹈",
   "character-portrait": "角色肖像",
   original: "原创",
+  yanai: "YanAI",
+  generate: "文生图",
+  edit: "图生图",
 }
 
 function compactPromptQuery(query: PromptQuery) {
@@ -241,7 +247,9 @@ export async function syncPromptSources(category?: string) {
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("同步超时：全量同步需要访问多个 GitHub 源，请稍后再试或先选择单个分类同步。")
+      throw new Error(
+        "同步超时：全量同步需要访问多个 GitHub 源，请稍后再试或先选择单个分类同步。"
+      )
     }
     throw new Error("同步接口连接失败，请确认本地后端已启动")
   } finally {
