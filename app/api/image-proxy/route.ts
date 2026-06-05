@@ -12,6 +12,8 @@ const allowedImageHosts = new Set([
   "pbs.twimg.com",
 ])
 
+const imageCacheControl = "public, max-age=2592000, immutable"
+
 function isAllowedImageUrl(value: string) {
   try {
     const parsed = new URL(value)
@@ -34,15 +36,20 @@ async function fetchDirectImage(source: string) {
   })
 }
 
-async function fetchBackendImage(source: string) {
+async function fetchBackendImage(source: string, requestHeaders: Headers) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 5000)
+  const timeout = setTimeout(() => controller.abort(), 45000)
+  const headers = new Headers({ Accept: "image/*,*/*;q=0.8" })
+  const ifNoneMatch = requestHeaders.get("if-none-match")
+  const ifModifiedSince = requestHeaders.get("if-modified-since")
+  if (ifNoneMatch) headers.set("If-None-Match", ifNoneMatch)
+  if (ifModifiedSince) headers.set("If-Modified-Since", ifModifiedSince)
 
   try {
     return await fetch(
       `${promptApiBase}/api/image-proxy?url=${encodeURIComponent(source)}`,
       {
-        headers: { Accept: "image/*,*/*;q=0.8" },
+        headers,
         redirect: "manual",
         cache: "no-store",
         signal: controller.signal,
@@ -54,6 +61,26 @@ async function fetchBackendImage(source: string) {
 }
 
 function toImageResponse(response: Response) {
+  const headers = new Headers()
+  const cacheControl = response.headers.get("cache-control") || imageCacheControl
+  headers.set("Cache-Control", cacheControl)
+
+  for (const name of [
+    "etag",
+    "last-modified",
+    "content-length",
+    "accept-ranges",
+    "content-range",
+    "x-image-cache",
+  ]) {
+    const value = response.headers.get(name)
+    if (value) headers.set(name, value)
+  }
+
+  if (response.status === 304) {
+    return new Response(null, { status: 304, headers })
+  }
+
   if (!response.ok) {
     return new Response("Image upstream failed", { status: response.status })
   }
@@ -63,14 +90,9 @@ function toImageResponse(response: Response) {
     return new Response("Image upstream failed", { status: 502 })
   }
 
-  const headers = new Headers({
-    "Content-Type": contentType,
-    "Cache-Control": "no-store",
-  })
-  const contentLength = response.headers.get("content-length")
-  if (contentLength) headers.set("Content-Length", contentLength)
+  headers.set("Content-Type", contentType)
 
-  return new Response(response.body, { status: 200, headers })
+  return new Response(response.body, { status: response.status, headers })
 }
 
 export async function GET(request: Request) {
@@ -80,9 +102,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const upstream = await fetchBackendImage(source)
+    const upstream = await fetchBackendImage(source, request.headers)
 
-    if (upstream.ok) return toImageResponse(upstream)
+    if (upstream.ok || upstream.status === 304) return toImageResponse(upstream)
   } catch {
     // Fall back to a direct fetch below. This keeps thumbnails working when an
     // older local backend is still occupying the backend port.

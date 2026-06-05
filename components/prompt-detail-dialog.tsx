@@ -73,6 +73,12 @@ export function PromptDetailDialog({
   const openImagePreview = () => {
     if (previewUrl) setPreviewOpen(true)
   }
+  const retryImagePreview = () => {
+    if (!originalPreviewUrl) return
+    setPreviewFailed(false)
+    setUseOriginalPreviewUrl(false)
+    setPreviewOpen(true)
+  }
 
   return (
     <div
@@ -148,6 +154,19 @@ export function PromptDetailDialog({
                         label={prompt.coverUrl ? "封面图片" : "图片样例暂缺"}
                         onPreview={previewUrl ? openImagePreview : undefined}
                       />
+                      {previewFailed && originalPreviewUrl ? (
+                        <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted px-3 py-2 text-sm text-muted-foreground">
+                          <span>图片预览加载失败，可以重试或等待本地缓存刷新。</span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={retryImagePreview}
+                          >
+                            重试预览
+                          </Button>
+                        </div>
+                      ) : null}
                       {prompt.preview ? (
                         <pre className="max-h-72 overflow-auto rounded-lg border bg-muted p-3 text-xs leading-6 whitespace-pre-wrap text-muted-foreground">
                           {prompt.preview}

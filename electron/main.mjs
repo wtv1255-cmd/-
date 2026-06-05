@@ -6,7 +6,7 @@ import {
   nativeTheme,
   shell,
 } from "electron"
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
@@ -49,6 +49,90 @@ function logStartup(message) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true })
     fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`)
   } catch {}
+}
+
+function readRegistryValue(name) {
+  if (process.platform !== "win32") return ""
+
+  try {
+    const output = execFileSync(
+      "reg",
+      [
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+        "/v",
+        name,
+      ],
+      { encoding: "utf8", windowsHide: true }
+    )
+    const line = output
+      .split(/\r?\n/)
+      .find((item) => item.trim().startsWith(name))
+    const match = line?.match(/\s+REG_\w+\s+(.+)$/)
+    return match?.[1]?.trim() || ""
+  } catch {
+    return ""
+  }
+}
+
+function normalizeProxyValue(value) {
+  const trimmed = value.trim()
+  if (!trimmed) return ""
+  if (/^[a-z]+:\/\//i.test(trimmed)) return trimmed
+  return `http://${trimmed}`
+}
+
+function parseProxyServer(value) {
+  const raw = value.trim()
+  if (!raw) return {}
+
+  if (!raw.includes("=")) {
+    const proxy = normalizeProxyValue(raw)
+    return { httpProxy: proxy, httpsProxy: proxy }
+  }
+
+  const entries = Object.fromEntries(
+    raw
+      .split(";")
+      .map((item) => item.split("="))
+      .filter(([key, proxy]) => key && proxy)
+      .map(([key, proxy]) => [key.trim().toLowerCase(), normalizeProxyValue(proxy)])
+  )
+  return {
+    httpProxy: entries.http || entries.https || entries.socks || "",
+    httpsProxy: entries.https || entries.http || entries.socks || "",
+  }
+}
+
+function getSystemProxyEnv() {
+  if (
+    process.env.HTTP_PROXY ||
+    process.env.HTTPS_PROXY ||
+    process.env.http_proxy ||
+    process.env.https_proxy
+  ) {
+    return {}
+  }
+
+  const proxyEnabled = readRegistryValue("ProxyEnable")
+  if (proxyEnabled !== "0x1" && proxyEnabled !== "1") return {}
+
+  const { httpProxy, httpsProxy } = parseProxyServer(readRegistryValue("ProxyServer"))
+  const proxyEnv = {}
+  if (httpProxy) {
+    proxyEnv.HTTP_PROXY = httpProxy
+    proxyEnv.http_proxy = httpProxy
+  }
+  if (httpsProxy) {
+    proxyEnv.HTTPS_PROXY = httpsProxy
+    proxyEnv.https_proxy = httpsProxy
+  }
+  if (httpProxy || httpsProxy) {
+    proxyEnv.NO_PROXY = "127.0.0.1,localhost,::1"
+    proxyEnv.no_proxy = proxyEnv.NO_PROXY
+    logStartup(`检测到系统代理，已用于本地后端：${httpsProxy || httpProxy}`)
+  }
+  return proxyEnv
 }
 
 function prepareUserDatabase(seedDbPath) {
@@ -139,9 +223,11 @@ async function startBackend() {
     )
     logStartup(`使用内置后端：${bundledBackendExe}`)
     startChild("提示词后端", bundledBackendExe, [], bundledBackendDir, {
+      ...getSystemProxyEnv(),
       PORT: String(BACKEND_PORT),
       STORAGE_DRIVER: "sqlite",
       DATABASE_DSN: userDbPath,
+      IMAGE_CACHE_DIR: path.join(app.getPath("userData"), "image-cache"),
     })
     await waitForPort(BACKEND_PORT, 45000)
     return
@@ -154,7 +240,9 @@ async function startBackend() {
   }
 
   logStartup(`使用开发后端：${FALLBACK_BACKEND_DIR}`)
-  startChild("提示词后端", "go", ["run", "."], FALLBACK_BACKEND_DIR)
+  startChild("提示词后端", "go", ["run", "."], FALLBACK_BACKEND_DIR, {
+    ...getSystemProxyEnv(),
+  })
   await waitForPort(BACKEND_PORT, 45000)
 }
 
@@ -163,6 +251,7 @@ async function startFrontend() {
   if (await isPortOpen(FRONTEND_PORT)) return
 
   const env = {
+    ...getSystemProxyEnv(),
     PORT: String(FRONTEND_PORT),
     HOSTNAME: HOST,
     NEXT_PUBLIC_PROMPT_API_BASE: `http://${HOST}:${BACKEND_PORT}`,
@@ -180,9 +269,9 @@ async function startFrontend() {
     const standaloneDir = path.join(projectDir, ".next", "standalone")
     const serverPath = findStandaloneServer(standaloneDir)
     logStartup(`使用 Next server：${serverPath}`)
-    process.env.PORT = env.PORT
-    process.env.HOSTNAME = env.HOSTNAME
-    process.env.NEXT_PUBLIC_PROMPT_API_BASE = env.NEXT_PUBLIC_PROMPT_API_BASE
+    for (const [key, value] of Object.entries(env)) {
+      process.env[key] = value
+    }
     process.chdir(path.dirname(serverPath))
     await import(pathToFileURL(serverPath).href)
   }
