@@ -14,12 +14,14 @@ import {
   Check,
   Copy,
   Download,
+  FileJson,
   FolderOpen,
   ImagePlus,
   Loader2,
   PanelLeft,
   Plus,
   RefreshCw,
+  Search,
   Settings as SettingsIcon,
   ShieldAlert,
   SlidersHorizontal,
@@ -72,6 +74,7 @@ import {
   type ImageSettings,
   type LocalImageCard,
   type ReversePromptMode,
+  type SafeImageSettings,
   type SourcePromptSnapshot,
 } from "@/lib/types/image"
 import { Button } from "@/components/ui/button"
@@ -111,8 +114,7 @@ function cloneDefaultModelApiProfiles() {
 }
 
 function defaultImageApiProfile(model: string) {
-  const profile =
-    DEFAULT_IMAGE_MODEL_API_PROFILES[model] ||
+  const profile = DEFAULT_IMAGE_MODEL_API_PROFILES[model] ||
     DEFAULT_IMAGE_MODEL_API_PROFILES[DEFAULT_IMAGE_SETTINGS.model] || {
       apiBaseUrl: DEFAULT_CODEX_PROXY_API_BASE,
       apiKey: "",
@@ -168,8 +170,7 @@ function hydrateModelApiProfiles(
 ) {
   const profiles = normalizeStoredModelApiProfiles(value)
   const legacyBaseUrl = cleanApiBaseUrl(legacyApiBaseUrl)
-  const legacyKey =
-    typeof legacyApiKey === "string" ? legacyApiKey.trim() : ""
+  const legacyKey = typeof legacyApiKey === "string" ? legacyApiKey.trim() : ""
 
   if (legacyKey && !LEGACY_IMAGE_API_BASE_URLS.has(legacyBaseUrl)) {
     const current = readImageApiProfile(profiles, activeModel)
@@ -200,6 +201,16 @@ function applyActiveImageApiProfile(settings: ImageSettings) {
   }
 }
 
+function toSafeImageSettings(settings: ImageSettings): SafeImageSettings {
+  const {
+    apiKey: _apiKey,
+    textApiKey: _textApiKey,
+    modelApiProfiles: _modelApiProfiles,
+    ...safeSettings
+  } = settings
+  return safeSettings
+}
+
 function normalizeTextApiBaseUrl(value: unknown, legacyApiBaseUrl: unknown) {
   const apiBaseUrl = cleanApiBaseUrl(value)
   if (apiBaseUrl) return apiBaseUrl
@@ -224,6 +235,7 @@ export function ImageWorkbench() {
   const promptId = searchParams.get("promptId") || ""
   const fileInputRef = useRef<HTMLInputElement>(null)
   const reverseFileInputRef = useRef<HTMLInputElement>(null)
+  const galleryImportInputRef = useRef<HTMLInputElement>(null)
   const [settings, setSettings] = useState<ImageSettings>(
     DEFAULT_IMAGE_SETTINGS
   )
@@ -391,10 +403,7 @@ export function ImageWorkbench() {
         const modelApiProfiles = normalizeStoredModelApiProfiles(
           current.modelApiProfiles
         )
-        const activeImageProfile = readImageApiProfile(
-          modelApiProfiles,
-          model
-        )
+        const activeImageProfile = readImageApiProfile(modelApiProfiles, model)
 
         return {
           ...current,
@@ -667,23 +676,17 @@ export function ImageWorkbench() {
   }
 
   const saveResult = async (image: GeneratedImage) => {
-    const {
-      apiKey: _apiKey,
-      textApiKey: _textApiKey,
-      modelApiProfiles: _modelApiProfiles,
-      ...safeSettings
-    } = settings
     const title = sourcePrompt?.title || prompt.slice(0, 24) || "生成图片"
     await saveLocalImageCard({
       blob: image.blob,
       title,
       prompt,
       tags: sourcePrompt?.tags || [],
-      settings: safeSettings,
+      settings: toSafeImageSettings(settings),
       sourcePrompt,
     })
     await refreshLibrary()
-    showToast("已保存到我的卡片图库")
+    showToast("已保存到我的图库")
   }
 
   const saveAllResults = async () => {
@@ -737,6 +740,96 @@ export function ImageWorkbench() {
       },
     ])
     showToast("已从图库加入参考图")
+  }
+
+  const useGalleryPrompt = (card: LocalImageCard) => {
+    if (!card.prompt.trim()) {
+      showToast("这张图片没有可复用的提示词")
+      return
+    }
+
+    setPrompt(card.prompt)
+    setSourcePrompt(null)
+    setMode("text")
+    setActiveTab("workbench")
+    setSettings((current) => {
+      const cardSettings = card.settings || toSafeImageSettings(current)
+      const model = normalizeImageModel(cardSettings.model)
+      const modelApiProfiles = normalizeStoredModelApiProfiles(
+        current.modelApiProfiles
+      )
+      const activeImageProfile = readImageApiProfile(modelApiProfiles, model)
+
+      return {
+        ...current,
+        model,
+        size: cardSettings.size,
+        quality: cardSettings.quality,
+        outputFormat: cardSettings.outputFormat,
+        background: cardSettings.background,
+        upscale: cardSettings.upscale,
+        count: cardSettings.count,
+        apiBaseUrl: activeImageProfile.apiBaseUrl,
+        apiKey: activeImageProfile.apiKey,
+        modelApiProfiles,
+      }
+    })
+    showToast("已复用图库提示词")
+  }
+
+  const importGalleryFiles = async (files?: FileList | null) => {
+    const imageFiles = Array.from(files || []).filter((file) =>
+      file.type.startsWith("image/")
+    )
+    if (!imageFiles.length) {
+      showToast("请选择图片文件")
+      return
+    }
+
+    let successCount = 0
+    let failedCount = 0
+    for (const file of imageFiles.slice(0, 50)) {
+      try {
+        await saveLocalImageCard({
+          blob: file,
+          title: file.name.replace(/\.[^.]+$/, "") || "导入图片",
+          prompt: "",
+          tags: ["imported"],
+          settings: toSafeImageSettings(settings),
+          sourcePrompt: null,
+        })
+        successCount += 1
+      } catch {
+        failedCount += 1
+      }
+    }
+
+    await refreshLibrary()
+    setActiveTab("gallery")
+    showToast(
+      failedCount
+        ? `已导入 ${successCount} 张，${failedCount} 张失败`
+        : `已导入 ${successCount} 张图片`
+    )
+  }
+
+  const exportGalleryIndex = (cards: LocalImageCard[]) => {
+    if (!cards.length) {
+      showToast("没有可导出的图库记录")
+      return
+    }
+
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      count: cards.length,
+      items: cards.map(({ imageKey: _imageKey, ...card }) => card),
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    })
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadBlob(blob, `prompt-center-gallery-${stamp}.json`)
+    showToast(`已导出 ${cards.length} 条图库索引`)
   }
 
   const deleteGalleryCard = async (card: LocalImageCard) => {
@@ -813,7 +906,7 @@ export function ImageWorkbench() {
             <div className="truncate text-xs text-muted-foreground">
               {sourcePrompt
                 ? `来自提示词：${sourcePrompt.title}`
-                : "CodexProxy 生图和本地卡片图库"}
+                : "CodexProxy 生图和本地图库"}
             </div>
           </div>
         </div>
@@ -1163,7 +1256,7 @@ export function ImageWorkbench() {
                         还没有生成图片
                       </div>
                       <p className="mt-1 text-sm text-zinc-500">
-                        输入提示词后开始生成，结果可以保存到我的卡片图库。
+                        输入提示词后开始生成，结果可以保存到我的图库。
                       </p>
                     </div>
                   </div>
@@ -1201,6 +1294,9 @@ export function ImageWorkbench() {
             <GalleryView
               cards={library}
               onRefresh={refreshLibrary}
+              onImport={() => galleryImportInputRef.current?.click()}
+              onExport={exportGalleryIndex}
+              onUsePrompt={useGalleryPrompt}
               onUseReference={useGalleryImageAsReference}
               onDelete={deleteGalleryCard}
               onPreview={(preview) => setPreviewImage(preview)}
@@ -1228,6 +1324,18 @@ export function ImageWorkbench() {
         className="hidden"
         onChange={(event) => {
           void addReverseFile(event.target.files)
+          event.currentTarget.value = ""
+        }}
+      />
+
+      <input
+        ref={galleryImportInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          void importGalleryFiles(event.target.files)
           event.currentTarget.value = ""
         }}
       />
@@ -1731,7 +1839,8 @@ function ApiSettingsDialog({
               API 设置
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              当前工作台模型是 {imageModelLabel}。每个生图模型都有独立 Base URL 和 Key。
+              当前工作台模型是 {imageModelLabel}。每个生图模型都有独立 Base URL
+              和 Key。
             </p>
           </div>
           <Button
@@ -1782,9 +1891,7 @@ function ApiSettingsDialog({
 
             <div className="grid gap-3">
               <div>
-                <h3 className="text-sm font-semibold">
-                  {selectedModelLabel}
-                </h3>
+                <h3 className="text-sm font-semibold">{selectedModelLabel}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
                   默认地址：{" "}
                   <span className="font-mono">
@@ -1880,11 +1987,7 @@ function ApiSettingsDialog({
             </Button>
             <Button
               onClick={() =>
-                onSave(
-                  draftProfiles,
-                  draftTextBaseUrl,
-                  draftTextKey
-                )
+                onSave(draftProfiles, draftTextBaseUrl, draftTextKey)
               }
             >
               保存
@@ -2130,42 +2233,136 @@ function ResultCard({
   )
 }
 
+type GalleryFilter = "all" | "prompt" | "imported" | "generated"
+
 function GalleryView({
   cards,
   onRefresh,
+  onImport,
+  onExport,
+  onUsePrompt,
   onUseReference,
   onDelete,
   onPreview,
 }: {
   cards: LocalImageCard[]
   onRefresh: () => Promise<void>
+  onImport: () => void
+  onExport: (cards: LocalImageCard[]) => void
+  onUsePrompt: (card: LocalImageCard) => void
   onUseReference: (card: LocalImageCard) => Promise<void>
   onDelete: (card: LocalImageCard) => Promise<void>
   onPreview: (preview: ImagePreview) => void
 }) {
+  const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState<GalleryFilter>("all")
+  const normalizedQuery = query.trim().toLowerCase()
+  const totalBytes = cards.reduce((sum, card) => sum + card.bytes, 0)
+  const filteredCards = cards.filter((card) => {
+    const tags = Array.isArray(card.tags) ? card.tags : []
+    const imported = tags.includes("imported")
+    const matchesFilter =
+      filter === "all" ||
+      (filter === "prompt" && Boolean(card.sourcePromptId)) ||
+      (filter === "imported" && imported) ||
+      (filter === "generated" && !imported)
+    if (!matchesFilter) return false
+    if (!normalizedQuery) return true
+
+    return [
+      card.title,
+      card.prompt,
+      card.sourcePromptTitle || "",
+      card.mimeType,
+      ...tags,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedQuery)
+  })
+  const visibleCards = filteredCards.slice(0, 360)
+  const filteredBytes = filteredCards.reduce((sum, card) => sum + card.bytes, 0)
+
   return (
     <section className="grid gap-4">
-      <div className="flex items-end justify-between gap-3">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-normal">
-            我的卡片图库
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-normal">我的图库</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             只保存到本地浏览器 IndexedDB，不是提示词图片样例库。
           </p>
         </div>
-        <Button variant="outline" onClick={() => void onRefresh()}>
-          <RefreshCw className="size-4" />
-          刷新
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={onImport}>
+            <Upload className="size-4" />
+            导入
+          </Button>
+          <Button variant="outline" onClick={() => onExport(filteredCards)}>
+            <FileJson className="size-4" />
+            导出索引
+          </Button>
+          <Button variant="outline" onClick={() => void onRefresh()}>
+            <RefreshCw className="size-4" />
+            刷新
+          </Button>
+        </div>
       </div>
 
-      {cards.length ? (
+      <div className="grid gap-3 rounded-lg border bg-background p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <label className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="h-10 w-full rounded-lg border bg-muted pr-3 pl-9 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+              placeholder="搜索标题、提示词、来源或标签"
+            />
+          </label>
+          <div className="grid grid-cols-4 rounded-lg border bg-muted p-1 lg:w-[360px]">
+            {(
+              [
+                ["all", "全部"],
+                ["prompt", "提示词"],
+                ["generated", "生成"],
+                ["imported", "导入"],
+              ] as Array<[GalleryFilter, string]>
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={cn(
+                  "h-8 rounded-md px-2 text-sm transition",
+                  filter === id
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setFilter(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span>全部 {cards.length} 张</span>
+          <span>当前 {filteredCards.length} 张</span>
+          <span>总占用 {formatBytes(totalBytes)}</span>
+          <span>当前占用 {formatBytes(filteredBytes)}</span>
+          {filteredCards.length > visibleCards.length ? (
+            <span>已显示前 {visibleCards.length} 张，继续搜索可缩小范围</span>
+          ) : null}
+        </div>
+      </div>
+
+      {visibleCards.length ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(156px,1fr))] gap-3 sm:grid-cols-[repeat(auto-fill,minmax(170px,200px))] sm:justify-start">
-          {cards.map((card) => (
+          {visibleCards.map((card) => (
             <GalleryCard
               key={card.id}
               card={card}
+              onUsePrompt={onUsePrompt}
               onUseReference={onUseReference}
               onDelete={onDelete}
               onPreview={onPreview}
@@ -2178,7 +2375,9 @@ function GalleryView({
             <FolderOpen className="mx-auto mb-3 size-10 text-muted-foreground" />
             <div className="font-medium">图库还没有图片</div>
             <p className="mt-1 text-sm text-muted-foreground">
-              生成结果点“入库”后会出现在这里。
+              {cards.length
+                ? "没有匹配当前搜索和筛选条件的图片。"
+                : "生成结果点“入库”，或直接导入本地图片。"}
             </p>
           </div>
         </div>
@@ -2189,16 +2388,20 @@ function GalleryView({
 
 function GalleryCard({
   card,
+  onUsePrompt,
   onUseReference,
   onDelete,
   onPreview,
 }: {
   card: LocalImageCard
+  onUsePrompt: (card: LocalImageCard) => void
   onUseReference: (card: LocalImageCard) => Promise<void>
   onDelete: (card: LocalImageCard) => Promise<void>
   onPreview: (preview: ImagePreview) => void
 }) {
   const [url, setUrl] = useState("")
+  const tags = Array.isArray(card.tags) ? card.tags : []
+  const imported = tags.includes("imported")
 
   useEffect(() => {
     let alive = true
@@ -2219,7 +2422,7 @@ function GalleryCard({
           onPreview({
             url,
             title: card.title,
-            subtitle: `${card.width}x${card.height} · ${formatBytes(card.bytes)}`,
+            subtitle: `${card.width}x${card.height} · ${formatBytes(card.bytes)} · ${formatDate(card.createdAt)}`,
           })
         }}
         title="点击放大"
@@ -2236,9 +2439,14 @@ function GalleryCard({
       </div>
       <div className="grid gap-2 p-2.5">
         <div>
-          <h2 className="line-clamp-1 text-[13px] font-semibold">
-            {card.title}
-          </h2>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <h2 className="line-clamp-1 min-w-0 text-[13px] font-semibold">
+              {card.title}
+            </h2>
+            <span className="shrink-0 rounded-full border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {imported ? "导入" : card.sourcePromptId ? "提示词" : "生成"}
+            </span>
+          </div>
           <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
             {card.prompt || "无提示词记录"}
           </p>
@@ -2248,11 +2456,22 @@ function GalleryCard({
             {card.width}x{card.height}
           </span>
           <span>{formatBytes(card.bytes)}</span>
+          <span>{formatDate(card.createdAt)}</span>
           {card.sourcePromptTitle ? (
             <span>来自：{card.sourcePromptTitle}</span>
           ) : null}
         </div>
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!card.prompt.trim()}
+            onClick={() => onUsePrompt(card)}
+            title={card.prompt.trim() ? "复用提示词和参数" : "没有提示词记录"}
+          >
+            <Sparkles className="size-3.5" />
+            复用
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -2426,6 +2645,15 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / 1024 / 1024).toFixed(2)} MB`
+}
+
+function formatDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "未知日期"
+  return date.toLocaleDateString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+  })
 }
 
 function formatDuration(value: number) {
