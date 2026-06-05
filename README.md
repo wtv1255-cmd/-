@@ -42,7 +42,12 @@ pnpm exec next dev --turbopack --port 48218
 
 ## 本地配置
 
-CodexProxy API 地址和 Key 在图片工作台右上角“设置”里填写，只保存在本机浏览器存储。
+图片工作台右上角“设置”里可以分别填写：
+
+- 生图 API：每个生图模型都有独立的 Base URL 和 Key。`gpt-image-2*` 默认使用 `https://api.xxiaozhi.com`，Agnes Image 2.1 Flash 默认使用 `https://apihub.agnes-ai.com/v1`。
+- 语言模型 API：用于反推提示词、优化提示词和规避敏感表达，默认使用 `https://ai.hybgzs.com/v1`。
+
+这些配置只保存在本机浏览器存储。
 
 `.env.local` 不再保存 CodexProxy 地址和密钥。
 
@@ -69,7 +74,17 @@ pnpm run desktop:build
 
 ## 数据说明
 
-`backend\data\infinite-canvas.db` 保留真实提示词数据，当前 `prompts` 表为 1361 条。用户、积分、素材和设置表已清空，只作为本地提示词中心的可重建数据包使用。
+`backend\data\infinite-canvas.db` 保留真实提示词数据，当前 `prompts` 表为 1361 条。用户、积分、素材和设置表已清空，只作为本地提示词中心的可重建种子数据包使用。
+
+打包后的桌面端第一次启动时，会把内置种子数据库复制到 Electron 用户数据目录：
+
+```text
+%APPDATA%\prompt-center-desktop\data\infinite-canvas.db
+```
+
+后续同步源写入的是这份用户数据库。同步成功后，正常重新启动会读取同步后的结果；重新打包或升级也不会覆盖这份用户数据库。
+
+图片工作台“我的图库”保存到本机浏览器 IndexedDB，生成接口返回的远程图片会先转成本地 Blob 再入库。
 
 如果 Electron 或 electron-builder 二进制下载慢，可以临时设置镜像：
 

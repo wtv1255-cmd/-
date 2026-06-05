@@ -196,7 +196,7 @@ export async function requestPromptReverse(input: ReversePromptInput) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: input.model.trim() || "gpt-4o",
+      model: input.model.trim() || "gpt-5.5",
       messages: [
         {
           role: "user",
@@ -214,8 +214,8 @@ export async function requestPromptReverse(input: ReversePromptInput) {
         },
       ],
       temperature: 0.2,
-      apiBaseUrl: input.settings.apiBaseUrl,
-      apiKey: input.settings.apiKey,
+      apiBaseUrl: input.settings.textApiBaseUrl,
+      apiKey: input.settings.textApiKey,
     }),
     signal: input.signal,
   })
@@ -261,8 +261,8 @@ export async function requestPromptSafetyRewrite(input: RewritePromptInput) {
         },
       ],
       temperature: 0.15,
-      apiBaseUrl: input.settings.apiBaseUrl,
-      apiKey: input.settings.apiKey,
+      apiBaseUrl: input.settings.textApiBaseUrl,
+      apiKey: input.settings.textApiKey,
     }),
     signal: input.signal,
   })
@@ -308,8 +308,8 @@ export async function requestPromptOptimization(input: OptimizePromptInput) {
         },
       ],
       temperature: 0.2,
-      apiBaseUrl: input.settings.apiBaseUrl,
-      apiKey: input.settings.apiKey,
+      apiBaseUrl: input.settings.textApiBaseUrl,
+      apiKey: input.settings.textApiKey,
     }),
     signal: input.signal,
   })

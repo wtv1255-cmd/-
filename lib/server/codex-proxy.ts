@@ -13,6 +13,8 @@ type ImagePayload = {
   apiKey?: string
 }
 
+export const AGNES_IMAGE_MODEL = "agnes-image-2.1-flash"
+
 function normalizeBaseUrl(value: unknown) {
   const baseUrl =
     typeof value === "string" ? value.trim().replace(/\/+$/, "") : ""
@@ -36,6 +38,35 @@ function keepParam(value: unknown) {
   return true
 }
 
+export function isAgnesImageModel(model: string) {
+  return model.toLowerCase() === AGNES_IMAGE_MODEL
+}
+
+export function buildAgnesImagePayload({
+  model,
+  prompt,
+  size,
+  images,
+}: {
+  model: string
+  prompt: string
+  size?: unknown
+  images?: string[]
+}) {
+  const extraBody: Record<string, unknown> = {
+    response_format: "url",
+  }
+  if (images?.length) extraBody.image = images
+
+  const payload: Record<string, unknown> = {
+    model,
+    prompt,
+    extra_body: extraBody,
+  }
+  if (keepParam(size)) payload.size = size
+  return payload
+}
+
 export function buildImageJsonPayload(input: ImagePayload) {
   const model = input.model?.trim() || "gpt-image-2"
   const prompt = input.prompt?.trim() || ""
@@ -46,6 +77,18 @@ export function buildImageJsonPayload(input: ImagePayload) {
 
   if (!prompt) {
     return { error: "请输入生图提示词" as const }
+  }
+
+  if (isAgnesImageModel(model)) {
+    return {
+      payload: buildAgnesImagePayload({
+        model,
+        prompt,
+        size: input.size,
+      }),
+      apiKey: readApiKey(input.apiKey),
+      apiBaseUrl: normalizeBaseUrl(input.apiBaseUrl),
+    }
   }
 
   const payload: Record<string, unknown> = {

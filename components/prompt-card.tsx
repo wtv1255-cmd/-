@@ -1,15 +1,17 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Copy, Eye, ImageIcon, Sparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import {
   formatPromptDate,
   getCategoryLabel,
   getPromptSourceLabel,
 } from "@/lib/api/prompts"
+import { resolvePromptImageUrl } from "@/lib/image-proxy"
 import type { Prompt, PromptViewMode } from "@/lib/types/prompt"
+import { cn } from "@/lib/utils"
 
 export function PromptVisual({
   prompt,
@@ -22,10 +24,23 @@ export function PromptVisual({
   label?: string | null
   onPreview?: () => void
 }) {
+  const [useOriginalImage, setUseOriginalImage] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
   const resolvedLabel =
     label === undefined
       ? `${getCategoryLabel(prompt.category)} · ${prompt.coverUrl ? "图片样例" : "无图片"}`
       : label
+  const proxiedImageUrl = resolvePromptImageUrl(prompt.coverUrl)
+  const imageUrl = imageFailed
+    ? ""
+    : useOriginalImage
+      ? prompt.coverUrl
+      : proxiedImageUrl
+
+  useEffect(() => {
+    setUseOriginalImage(false)
+    setImageFailed(false)
+  }, [prompt.coverUrl])
 
   return (
     <div
@@ -37,10 +52,20 @@ export function PromptVisual({
       onClick={onPreview}
       title={onPreview ? "点击放大" : undefined}
     >
-      {prompt.coverUrl ? (
+      {imageUrl ? (
         <img
-          src={prompt.coverUrl}
+          src={imageUrl}
           alt={prompt.title}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onError={() => {
+            if (!useOriginalImage && prompt.coverUrl !== proxiedImageUrl) {
+              setUseOriginalImage(true)
+              return
+            }
+            setImageFailed(true)
+          }}
           className="absolute inset-0 h-full w-full object-contain saturate-[.86]"
         />
       ) : (
@@ -48,6 +73,11 @@ export function PromptVisual({
           <div className="absolute inset-4 rounded-md border border-white/70 bg-white/45" />
           <div className="absolute inset-4 rounded-md bg-[linear-gradient(rgba(15,23,42,.06)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.06)_1px,transparent_1px)] bg-[length:18px_18px]" />
           <ImageIcon className="absolute top-3 right-3 size-4 text-muted-foreground/70" />
+          {prompt.coverUrl && imageFailed ? (
+            <span className="absolute inset-x-4 top-1/2 -translate-y-1/2 text-center text-xs text-muted-foreground">
+              图片加载失败
+            </span>
+          ) : null}
         </>
       )}
       {resolvedLabel ? (

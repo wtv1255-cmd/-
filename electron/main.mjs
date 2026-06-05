@@ -51,6 +51,19 @@ function logStartup(message) {
   } catch {}
 }
 
+function prepareUserDatabase(seedDbPath) {
+  const dataDir = path.join(app.getPath("userData"), "data")
+  const userDbPath = path.join(dataDir, "infinite-canvas.db")
+
+  fs.mkdirSync(dataDir, { recursive: true })
+  if (!fs.existsSync(userDbPath) && fs.existsSync(seedDbPath)) {
+    fs.copyFileSync(seedDbPath, userDbPath)
+    logStartup(`初始化用户数据库：${userDbPath}`)
+  }
+
+  return userDbPath
+}
+
 function isPortOpen(port) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: HOST, port })
@@ -121,11 +134,14 @@ async function startBackend() {
   if (await isPortOpen(BACKEND_PORT)) return
 
   if (fs.existsSync(bundledBackendExe)) {
+    const userDbPath = prepareUserDatabase(
+      path.join(bundledBackendDir, "data", "infinite-canvas.db")
+    )
     logStartup(`使用内置后端：${bundledBackendExe}`)
     startChild("提示词后端", bundledBackendExe, [], bundledBackendDir, {
       PORT: String(BACKEND_PORT),
       STORAGE_DRIVER: "sqlite",
-      DATABASE_DSN: path.join(bundledBackendDir, "data", "infinite-canvas.db"),
+      DATABASE_DSN: userDbPath,
     })
     await waitForPort(BACKEND_PORT, 45000)
     return

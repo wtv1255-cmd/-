@@ -17,6 +17,7 @@ func New() *gin.Engine {
 	})
 	api.GET("/prompts", gin.WrapF(handler.Prompts))
 	api.POST("/prompts/sync", gin.WrapF(handler.PromptSync))
+	api.GET("/image-proxy", gin.WrapF(handler.ImageProxy))
 
 	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{

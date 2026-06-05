@@ -11,8 +11,9 @@ import {
   getPromptSourceLabel,
   getTagLabel,
 } from "@/lib/api/prompts"
-import { cn } from "@/lib/utils"
+import { resolvePromptImageUrl } from "@/lib/image-proxy"
 import type { Prompt } from "@/lib/types/prompt"
+import { cn } from "@/lib/utils"
 
 type DetailTab = "prompt" | "images" | "meta"
 
@@ -35,10 +36,14 @@ export function PromptDetailDialog({
 }) {
   const [activeTab, setActiveTab] = useState<DetailTab>("prompt")
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [useOriginalPreviewUrl, setUseOriginalPreviewUrl] = useState(false)
+  const [previewFailed, setPreviewFailed] = useState(false)
 
   useEffect(() => {
     setActiveTab("prompt")
     setPreviewOpen(false)
+    setUseOriginalPreviewUrl(false)
+    setPreviewFailed(false)
   }, [prompt?.id])
 
   useEffect(() => {
@@ -58,7 +63,13 @@ export function PromptDetailDialog({
 
   if (!prompt) return null
 
-  const previewUrl = prompt.coverUrl || ""
+  const originalPreviewUrl = prompt.coverUrl || ""
+  const proxiedPreviewUrl = resolvePromptImageUrl(originalPreviewUrl)
+  const previewUrl = previewFailed
+    ? ""
+    : useOriginalPreviewUrl
+      ? originalPreviewUrl
+      : proxiedPreviewUrl
   const openImagePreview = () => {
     if (previewUrl) setPreviewOpen(true)
   }
@@ -259,6 +270,15 @@ export function PromptDetailDialog({
           <img
             src={previewUrl}
             alt={prompt.title}
+            referrerPolicy="no-referrer"
+            onError={() => {
+              if (!useOriginalPreviewUrl && originalPreviewUrl !== proxiedPreviewUrl) {
+                setUseOriginalPreviewUrl(true)
+                return
+              }
+              setPreviewFailed(true)
+              setPreviewOpen(false)
+            }}
             className="max-h-[92svh] max-w-[92vw] cursor-zoom-out object-contain"
             onClick={() => setPreviewOpen(false)}
             title="点击缩小"

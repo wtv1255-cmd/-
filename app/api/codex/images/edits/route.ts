@@ -1,6 +1,9 @@
 import {
   appendImageFormValue,
+  buildAgnesImagePayload,
   forwardCodexImageForm,
+  forwardCodexImageJson,
+  isAgnesImageModel,
   resolveRequestBaseUrl,
   resolveRequestApiKey,
 } from "@/lib/server/codex-proxy"
@@ -24,6 +27,21 @@ export async function POST(request: Request) {
     return Response.json({ error: "图生图需要至少一张参考图" }, { status: 400 })
   }
 
+  if (isAgnesImageModel(model)) {
+    const imageDataUrls = await Promise.all(images.map(fileToDataUrl))
+    return forwardCodexImageJson(
+      "/v1/images/generations",
+      buildAgnesImagePayload({
+        model,
+        prompt,
+        size: input.get("size"),
+        images: imageDataUrls,
+      }),
+      apiBaseUrl,
+      apiKey
+    )
+  }
+
   const formData = new FormData()
   formData.set("prompt", prompt)
   formData.set("model", model)
@@ -40,4 +58,9 @@ export async function POST(request: Request) {
   })
 
   return forwardCodexImageForm("/v1/images/edits", formData, apiBaseUrl, apiKey)
+}
+
+async function fileToDataUrl(file: File) {
+  const bytes = Buffer.from(await file.arrayBuffer())
+  return `data:${file.type || "image/png"};base64,${bytes.toString("base64")}`
 }

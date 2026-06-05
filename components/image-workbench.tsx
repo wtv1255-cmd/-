@@ -52,6 +52,8 @@ import {
   DEFAULT_NEGATIVE_PROMPT_SUFFIX,
   DEFAULT_IMAGE_SETTINGS,
   DEFAULT_CODEX_PROXY_API_BASE,
+  DEFAULT_IMAGE_MODEL_API_PROFILES,
+  DEFAULT_TEXT_API_BASE,
   IMAGE_BACKGROUND_OPTIONS,
   IMAGE_FORMAT_OPTIONS,
   IMAGE_MODELS,
@@ -62,8 +64,10 @@ import {
   IMAGE_UPSCALE_OPTIONS,
   REVERSE_PROMPT_MODES,
   TEXT_MODEL_OPTIONS,
+  YANAI_IMAGE_PROMPT_PRESETS,
   type GeneratedImage,
   type ImageMode,
+  type ImageModelApiProfile,
   type ImageReference,
   type ImageSettings,
   type LocalImageCard,
@@ -76,6 +80,135 @@ import { cn } from "@/lib/utils"
 type WorkbenchTab = "workbench" | "reverse" | "gallery"
 
 const SETTINGS_STORAGE_KEY = "prompt-center:image-settings"
+const LEGACY_IMAGE_MODEL_MAP: Record<string, string> = {
+  "gpt-image-2-1k": "gpt-image-2-1K",
+  "gpt-image-2-2k": "gpt-image-2-2K",
+  "gpt-image-2-4k": "gpt-image-2-4K",
+}
+const LEGACY_IMAGE_API_BASE_URLS = new Set([
+  "https://laodeng.chat/v1",
+  "https://ai.hybgzs.com/v1",
+])
+
+function normalizeImageModel(value: unknown) {
+  if (typeof value !== "string") return DEFAULT_IMAGE_SETTINGS.model
+  const model = value.trim()
+  if (!model) return DEFAULT_IMAGE_SETTINGS.model
+  return LEGACY_IMAGE_MODEL_MAP[model] || model
+}
+
+function cleanApiBaseUrl(value: unknown) {
+  return typeof value === "string" ? value.trim().replace(/\/+$/, "") : ""
+}
+
+function cloneDefaultModelApiProfiles() {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_IMAGE_MODEL_API_PROFILES).map(([model, profile]) => [
+      model,
+      { ...profile },
+    ])
+  ) as Record<string, ImageModelApiProfile>
+}
+
+function defaultImageApiProfile(model: string) {
+  const profile =
+    DEFAULT_IMAGE_MODEL_API_PROFILES[model] ||
+    DEFAULT_IMAGE_MODEL_API_PROFILES[DEFAULT_IMAGE_SETTINGS.model] || {
+      apiBaseUrl: DEFAULT_CODEX_PROXY_API_BASE,
+      apiKey: "",
+    }
+  return { ...profile }
+}
+
+function normalizeImageApiBaseUrl(value: unknown, model: string) {
+  const apiBaseUrl = cleanApiBaseUrl(value)
+  if (!apiBaseUrl || LEGACY_IMAGE_API_BASE_URLS.has(apiBaseUrl)) {
+    return defaultImageApiProfile(model).apiBaseUrl
+  }
+  return apiBaseUrl
+}
+
+function normalizeStoredModelApiProfiles(value: unknown) {
+  const profiles = cloneDefaultModelApiProfiles()
+
+  if (value && typeof value === "object") {
+    Object.entries(value as Record<string, unknown>).forEach(
+      ([rawModel, rawProfile]) => {
+        const model = normalizeImageModel(rawModel)
+        if (!rawProfile || typeof rawProfile !== "object") return
+        const profile = rawProfile as Partial<ImageModelApiProfile>
+        const rawBaseUrl = cleanApiBaseUrl(profile.apiBaseUrl)
+        profiles[model] = {
+          apiBaseUrl: normalizeImageApiBaseUrl(rawBaseUrl, model),
+          apiKey: LEGACY_IMAGE_API_BASE_URLS.has(rawBaseUrl)
+            ? ""
+            : typeof profile.apiKey === "string"
+              ? profile.apiKey.trim()
+              : "",
+        }
+      }
+    )
+  }
+
+  return profiles
+}
+
+function readImageApiProfile(
+  profiles: Record<string, ImageModelApiProfile>,
+  model: string
+) {
+  return profiles[model] || defaultImageApiProfile(model)
+}
+
+function hydrateModelApiProfiles(
+  value: unknown,
+  activeModel: string,
+  legacyApiBaseUrl: unknown,
+  legacyApiKey: unknown
+) {
+  const profiles = normalizeStoredModelApiProfiles(value)
+  const legacyBaseUrl = cleanApiBaseUrl(legacyApiBaseUrl)
+  const legacyKey =
+    typeof legacyApiKey === "string" ? legacyApiKey.trim() : ""
+
+  if (legacyKey && !LEGACY_IMAGE_API_BASE_URLS.has(legacyBaseUrl)) {
+    const current = readImageApiProfile(profiles, activeModel)
+    if (!current.apiKey.trim()) {
+      profiles[activeModel] = {
+        apiBaseUrl: normalizeImageApiBaseUrl(legacyBaseUrl, activeModel),
+        apiKey: legacyKey,
+      }
+    }
+  }
+
+  if (!profiles[activeModel])
+    profiles[activeModel] = defaultImageApiProfile(activeModel)
+  return profiles
+}
+
+function applyActiveImageApiProfile(settings: ImageSettings) {
+  const model = normalizeImageModel(settings.model)
+  const profiles = normalizeStoredModelApiProfiles(settings.modelApiProfiles)
+  const activeProfile = readImageApiProfile(profiles, model)
+
+  return {
+    ...settings,
+    model,
+    apiBaseUrl: activeProfile.apiBaseUrl,
+    apiKey: activeProfile.apiKey,
+    modelApiProfiles: profiles,
+  }
+}
+
+function normalizeTextApiBaseUrl(value: unknown, legacyApiBaseUrl: unknown) {
+  const apiBaseUrl = cleanApiBaseUrl(value)
+  if (apiBaseUrl) return apiBaseUrl
+
+  const legacyApiBase = cleanApiBaseUrl(legacyApiBaseUrl)
+  if (legacyApiBase === DEFAULT_TEXT_API_BASE) return legacyApiBase
+
+  return DEFAULT_IMAGE_SETTINGS.textApiBaseUrl
+}
 
 type ImagePreview = {
   url: string
@@ -129,9 +262,18 @@ export function ImageWorkbench() {
   const [toast, setToast] = useState("")
 
   const selectedModel = settings.model
-  const apiConfigured = Boolean(
+  const selectedModelLabel =
+    IMAGE_MODELS.find((item) => item.value === selectedModel)?.label ||
+    selectedModel
+  const selectedModelDefaultApiBaseUrl =
+    defaultImageApiProfile(selectedModel).apiBaseUrl
+  const imageApiConfigured = Boolean(
     settings.apiBaseUrl.trim() && settings.apiKey.trim()
   )
+  const textApiConfigured = Boolean(
+    settings.textApiBaseUrl.trim() && settings.textApiKey.trim()
+  )
+  const apiConfigured = imageApiConfigured && textApiConfigured
   const generationCount = Math.max(
     1,
     Math.min(10, Math.floor(Math.abs(Number(settings.count)) || 1))
@@ -154,11 +296,38 @@ export function ImageWorkbench() {
       const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
       if (!saved) return
       const parsed = JSON.parse(saved) as Partial<ImageSettings>
+      const model = normalizeImageModel(parsed.model)
+      const legacyApiBaseUrl = cleanApiBaseUrl(parsed.apiBaseUrl)
+      const legacyApiKey =
+        typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : ""
+      const imageApiKey = LEGACY_IMAGE_API_BASE_URLS.has(legacyApiBaseUrl)
+        ? DEFAULT_IMAGE_SETTINGS.apiKey
+        : legacyApiKey
+      const textApiKey =
+        typeof parsed.textApiKey === "string"
+          ? parsed.textApiKey.trim()
+          : legacyApiBaseUrl === DEFAULT_TEXT_API_BASE
+            ? legacyApiKey
+            : DEFAULT_IMAGE_SETTINGS.textApiKey
+      const modelApiProfiles = hydrateModelApiProfiles(
+        parsed.modelApiProfiles,
+        model,
+        parsed.apiBaseUrl,
+        imageApiKey
+      )
+      const activeImageProfile = readImageApiProfile(modelApiProfiles, model)
       setSettings({
         ...DEFAULT_IMAGE_SETTINGS,
         ...parsed,
-        apiBaseUrl:
-          parsed.apiBaseUrl?.trim() || DEFAULT_IMAGE_SETTINGS.apiBaseUrl,
+        model,
+        apiBaseUrl: activeImageProfile.apiBaseUrl,
+        apiKey: activeImageProfile.apiKey,
+        modelApiProfiles,
+        textApiBaseUrl: normalizeTextApiBaseUrl(
+          parsed.textApiBaseUrl,
+          parsed.apiBaseUrl
+        ),
+        textApiKey,
       })
     } catch {
       setSettings(DEFAULT_IMAGE_SETTINGS)
@@ -214,7 +383,28 @@ export function ImageWorkbench() {
     key: K,
     value: ImageSettings[K]
   ) => {
-    setSettings((current) => ({ ...current, [key]: value }))
+    setSettings((current) => {
+      if (key === "model") {
+        const model = normalizeImageModel(value)
+        const modelApiProfiles = normalizeStoredModelApiProfiles(
+          current.modelApiProfiles
+        )
+        const activeImageProfile = readImageApiProfile(
+          modelApiProfiles,
+          model
+        )
+
+        return {
+          ...current,
+          model,
+          apiBaseUrl: activeImageProfile.apiBaseUrl,
+          apiKey: activeImageProfile.apiKey,
+          modelApiProfiles,
+        }
+      }
+
+      return { ...current, [key]: value }
+    })
   }
 
   const addReferenceFiles = async (files?: FileList | null) => {
@@ -272,6 +462,12 @@ export function ImageWorkbench() {
   }
 
   const generateImages = async () => {
+    if (!imageApiConfigured) {
+      setApiSettingsOpen(true)
+      showToast("请先填写生图 API 地址和 Key")
+      return
+    }
+
     const startedAt = performance.now()
     const controller = new AbortController()
     const pendingResults = Array.from({ length: generationCount }, () => ({
@@ -288,13 +484,14 @@ export function ImageWorkbench() {
     await Promise.all(
       pendingResults.map(async (slot) => {
         try {
+          const requestSettings = applyActiveImageApiProfile(settings)
           const images =
             mode === "edit"
               ? await requestImageEdit({
                   prompt,
                   style,
                   negativePrompt,
-                  settings: { ...settings, count: 1 },
+                  settings: { ...requestSettings, count: 1 },
                   references,
                   signal: controller.signal,
                 })
@@ -302,7 +499,7 @@ export function ImageWorkbench() {
                   prompt,
                   style,
                   negativePrompt,
-                  settings: { ...settings, count: 1 },
+                  settings: { ...requestSettings, count: 1 },
                   signal: controller.signal,
                 })
 
@@ -353,9 +550,9 @@ export function ImageWorkbench() {
       showToast("请先上传一张参考图")
       return
     }
-    if (!apiConfigured) {
+    if (!textApiConfigured) {
       setApiSettingsOpen(true)
-      showToast("请先填写 API 地址和 Key")
+      showToast("请先填写语言模型 API 地址和 Key")
       return
     }
 
@@ -410,9 +607,9 @@ export function ImageWorkbench() {
       showToast("请先输入提示词")
       return
     }
-    if (!apiConfigured) {
+    if (!textApiConfigured) {
       setApiSettingsOpen(true)
-      showToast("请先填写 API 地址和 Key")
+      showToast("请先填写语言模型 API 地址和 Key")
       return
     }
 
@@ -441,9 +638,9 @@ export function ImageWorkbench() {
       showToast("请先输入提示词")
       return
     }
-    if (!apiConfigured) {
+    if (!textApiConfigured) {
       setApiSettingsOpen(true)
-      showToast("请先填写 API 地址和 Key")
+      showToast("请先填写语言模型 API 地址和 Key")
       return
     }
 
@@ -468,7 +665,12 @@ export function ImageWorkbench() {
   }
 
   const saveResult = async (image: GeneratedImage) => {
-    const { apiKey: _apiKey, ...safeSettings } = settings
+    const {
+      apiKey: _apiKey,
+      textApiKey: _textApiKey,
+      modelApiProfiles: _modelApiProfiles,
+      ...safeSettings
+    } = settings
     const title = sourcePrompt?.title || prompt.slice(0, 24) || "生成图片"
     await saveLocalImageCard({
       blob: image.blob,
@@ -550,25 +752,76 @@ export function ImageWorkbench() {
     }
   }
 
-  const saveApiSettings = (apiBaseUrl: string, apiKey: string) => {
-    setSettings((current) => ({
-      ...current,
-      apiBaseUrl:
-        apiBaseUrl.trim().replace(/\/+$/, "") || DEFAULT_CODEX_PROXY_API_BASE,
-      apiKey: apiKey.trim(),
-    }))
+  const applyPromptPreset = (
+    preset: (typeof YANAI_IMAGE_PROMPT_PRESETS)[number]
+  ) => {
+    setPrompt(preset.prompt)
+    setMode(preset.mode)
+    setActiveTab("workbench")
+    showToast(
+      preset.mode === "edit" && references.length === 0
+        ? `已套用「${preset.label}」，请上传参考图`
+        : `已套用「${preset.label}」`
+    )
+  }
+
+  const saveApiSettings = (
+    apiBaseUrl: string,
+    apiKey: string,
+    textApiBaseUrl: string,
+    textApiKey: string
+  ) => {
+    setSettings((current) => {
+      const model = normalizeImageModel(current.model)
+      const modelApiProfiles = normalizeStoredModelApiProfiles(
+        current.modelApiProfiles
+      )
+      const activeImageProfile = {
+        apiBaseUrl:
+          cleanApiBaseUrl(apiBaseUrl) || defaultImageApiProfile(model).apiBaseUrl,
+        apiKey: apiKey.trim(),
+      }
+      modelApiProfiles[model] = activeImageProfile
+
+      return {
+        ...current,
+        model,
+        apiBaseUrl: activeImageProfile.apiBaseUrl,
+        apiKey: activeImageProfile.apiKey,
+        modelApiProfiles,
+        textApiBaseUrl:
+          cleanApiBaseUrl(textApiBaseUrl) || DEFAULT_TEXT_API_BASE,
+        textApiKey: textApiKey.trim(),
+      }
+    })
     setApiSettingsOpen(false)
     showToast("API 配置已保存")
   }
 
   const clearApiSettings = () => {
-    setSettings((current) => ({
-      ...current,
-      apiBaseUrl: DEFAULT_CODEX_PROXY_API_BASE,
-      apiKey: "",
-    }))
+    setSettings((current) => {
+      const model = normalizeImageModel(current.model)
+      const modelApiProfiles = normalizeStoredModelApiProfiles(
+        current.modelApiProfiles
+      )
+      const activeImageProfile = {
+        ...defaultImageApiProfile(model),
+        apiKey: "",
+      }
+      modelApiProfiles[model] = activeImageProfile
+
+      return {
+        ...current,
+        model,
+        apiBaseUrl: activeImageProfile.apiBaseUrl,
+        apiKey: "",
+        modelApiProfiles,
+        textApiBaseUrl: DEFAULT_TEXT_API_BASE,
+        textApiKey: "",
+      }
+    })
     setApiSettingsOpen(false)
-    showToast("API 地址和 Key 已清空")
+    showToast("当前生图模型和语言模型配置已清空")
   }
 
   return (
@@ -657,13 +910,29 @@ export function ImageWorkbench() {
               onTextModelChange={setTextModel}
               onClose={() => setSidebarOpen(false)}
               onReset={() =>
-                setSettings((current) => ({
-                  ...DEFAULT_IMAGE_SETTINGS,
-                  apiBaseUrl: current.apiBaseUrl,
-                  apiKey: current.apiKey,
-                }))
+                setSettings((current) => {
+                  const model = DEFAULT_IMAGE_SETTINGS.model
+                  const modelApiProfiles = normalizeStoredModelApiProfiles(
+                    current.modelApiProfiles
+                  )
+                  const activeImageProfile = readImageApiProfile(
+                    modelApiProfiles,
+                    model
+                  )
+
+                  return {
+                    ...DEFAULT_IMAGE_SETTINGS,
+                    model,
+                    apiBaseUrl: activeImageProfile.apiBaseUrl,
+                    apiKey: activeImageProfile.apiKey,
+                    modelApiProfiles,
+                    textApiBaseUrl: current.textApiBaseUrl,
+                    textApiKey: current.textApiKey,
+                  }
+                })
               }
-              apiConfigured={apiConfigured}
+              imageApiConfigured={imageApiConfigured}
+              textApiConfigured={textApiConfigured}
               onOpenApiSettings={() => setApiSettingsOpen(true)}
             />
           ) : (
@@ -698,7 +967,8 @@ export function ImageWorkbench() {
                       创建生图
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {selectedModel} · {settings.size} · {settings.quality}
+                      {selectedModelLabel} · {settings.size} ·{" "}
+                      {settings.quality}
                     </p>
                   </div>
                   <Button variant="outline" onClick={clearSession}>
@@ -764,6 +1034,30 @@ export function ImageWorkbench() {
                       placeholder="描述画面主体、风格、构图、光线和用途"
                     />
                   </label>
+
+                  <div className="grid gap-2">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Sparkles className="size-4" />
+                      快捷修图
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {YANAI_IMAGE_PROMPT_PRESETS.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="min-h-16 rounded-md border bg-background px-3 py-2 text-left transition hover:bg-muted"
+                          onClick={() => applyPromptPreset(item)}
+                        >
+                          <span className="block text-xs font-medium text-foreground">
+                            {item.label}
+                          </span>
+                          <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
+                            {item.description}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
                   <label className="grid gap-2">
                     <span className="text-sm font-medium">风格</span>
@@ -909,7 +1203,7 @@ export function ImageWorkbench() {
               negativePrompt={negativePrompt}
               output={reverseOutput}
               isRunning={isReversing}
-              apiConfigured={apiConfigured}
+              textApiConfigured={textApiConfigured}
               onModeChange={setReverseMode}
               onModelChange={setTextModel}
               onStyleChange={setReverseStyle}
@@ -968,8 +1262,12 @@ export function ImageWorkbench() {
       />
       <ApiSettingsDialog
         open={apiSettingsOpen}
+        imageModelLabel={selectedModelLabel}
+        imageDefaultApiBaseUrl={selectedModelDefaultApiBaseUrl}
         apiBaseUrl={settings.apiBaseUrl}
         apiKey={settings.apiKey}
+        textApiBaseUrl={settings.textApiBaseUrl}
+        textApiKey={settings.textApiKey}
         onClose={() => setApiSettingsOpen(false)}
         onSave={saveApiSettings}
         onClear={clearApiSettings}
@@ -993,7 +1291,7 @@ function ReversePromptView({
   negativePrompt,
   output,
   isRunning,
-  apiConfigured,
+  textApiConfigured,
   onModeChange,
   onModelChange,
   onStyleChange,
@@ -1014,7 +1312,7 @@ function ReversePromptView({
   negativePrompt: string
   output: string
   isRunning: boolean
-  apiConfigured: boolean
+  textApiConfigured: boolean
   onModeChange: (mode: ReversePromptMode) => void
   onModelChange: (model: string) => void
   onStyleChange: (style: string) => void
@@ -1161,10 +1459,10 @@ function ReversePromptView({
             />
           </label>
 
-          {!apiConfigured ? (
+          {!textApiConfigured ? (
             <Button variant="outline" onClick={onOpenSettings}>
               <SettingsIcon className="size-4" />
-              填写 API 设置
+              填写语言模型 API
             </Button>
           ) : null}
 
@@ -1225,7 +1523,8 @@ function SettingsPanel({
   onTextModelChange,
   onClose,
   onReset,
-  apiConfigured,
+  imageApiConfigured,
+  textApiConfigured,
   onOpenApiSettings,
 }: {
   mode: ImageMode
@@ -1239,7 +1538,8 @@ function SettingsPanel({
   onTextModelChange: (model: string) => void
   onClose: () => void
   onReset: () => void
-  apiConfigured: boolean
+  imageApiConfigured: boolean
+  textApiConfigured: boolean
   onOpenApiSettings: () => void
 }) {
   return (
@@ -1373,9 +1673,8 @@ function SettingsPanel({
       >
         <div className="font-medium">API 配置</div>
         <div className="mt-1 text-xs text-muted-foreground">
-          {apiConfigured
-            ? "已填写 API 地址和 Key"
-            : "未配置，点击填写地址和 Key"}
+          当前生图模型{imageApiConfigured ? "已配置" : "未配置"} · 语言模型
+          {textApiConfigured ? "已配置" : "未配置"}
         </div>
       </button>
 
@@ -1388,27 +1687,44 @@ function SettingsPanel({
 
 function ApiSettingsDialog({
   open,
+  imageModelLabel,
+  imageDefaultApiBaseUrl,
   apiBaseUrl,
   apiKey,
+  textApiBaseUrl,
+  textApiKey,
   onClose,
   onSave,
   onClear,
 }: {
   open: boolean
+  imageModelLabel: string
+  imageDefaultApiBaseUrl: string
   apiBaseUrl: string
   apiKey: string
+  textApiBaseUrl: string
+  textApiKey: string
   onClose: () => void
-  onSave: (apiBaseUrl: string, apiKey: string) => void
+  onSave: (
+    apiBaseUrl: string,
+    apiKey: string,
+    textApiBaseUrl: string,
+    textApiKey: string
+  ) => void
   onClear: () => void
 }) {
   const [draftBaseUrl, setDraftBaseUrl] = useState(apiBaseUrl)
   const [draftKey, setDraftKey] = useState(apiKey)
+  const [draftTextBaseUrl, setDraftTextBaseUrl] = useState(textApiBaseUrl)
+  const [draftTextKey, setDraftTextKey] = useState(textApiKey)
 
   useEffect(() => {
     if (!open) return
     setDraftBaseUrl(apiBaseUrl)
     setDraftKey(apiKey)
-  }, [apiBaseUrl, apiKey, open])
+    setDraftTextBaseUrl(textApiBaseUrl)
+    setDraftTextKey(textApiKey)
+  }, [apiBaseUrl, apiKey, textApiBaseUrl, textApiKey, open])
 
   if (!open) return null
 
@@ -1422,14 +1738,14 @@ function ApiSettingsDialog({
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <article className="w-full max-w-lg overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-2xl">
+      <article className="w-full max-w-2xl overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-2xl">
         <header className="flex items-start justify-between gap-3 border-b px-5 py-4">
           <div>
             <h2 id="api-settings-title" className="text-base font-semibold">
               API 设置
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              填写 CodexProxy 兼容接口地址和 API Key，仅保存在本机。
+              每个生图模型都有独立 Base URL 和 Key；语言模型单独配置。
             </p>
           </div>
           <Button
@@ -1442,32 +1758,73 @@ function ApiSettingsDialog({
           </Button>
         </header>
 
-        <div className="grid gap-4 p-5">
-          <label className="grid gap-2">
-            <span className="text-sm font-medium">API 地址</span>
-            <input
-              value={draftBaseUrl}
-              onChange={(event) => setDraftBaseUrl(event.target.value)}
-              className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
-              placeholder="例如：https://laodeng.chat/v1"
-            />
-          </label>
+        <div className="grid gap-5 p-5">
+          <section className="grid gap-3 rounded-lg border bg-background p-4">
+            <div>
+              <h3 className="text-sm font-semibold">
+                生图 API：{imageModelLabel}
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                只影响当前选中的生图模型，切换模型后可配置另一套地址和 Key。
+              </p>
+            </div>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">API 地址</span>
+              <input
+                value={draftBaseUrl}
+                onChange={(event) => setDraftBaseUrl(event.target.value)}
+                className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                placeholder={`例如：${imageDefaultApiBaseUrl}`}
+              />
+            </label>
 
-          <label className="grid gap-2">
-            <span className="text-sm font-medium">API Key</span>
-            <input
-              value={draftKey}
-              onChange={(event) => setDraftKey(event.target.value)}
-              className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
-              type="password"
-              placeholder="sk-..."
-            />
-          </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">API Key</span>
+              <input
+                value={draftKey}
+                onChange={(event) => setDraftKey(event.target.value)}
+                className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                type="password"
+                placeholder="sk-..."
+              />
+            </label>
+          </section>
+
+          <section className="grid gap-3 rounded-lg border bg-background p-4">
+            <div>
+              <h3 className="text-sm font-semibold">语言模型 API</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                用于反推提示词、优化提示词和规避敏感表达。
+              </p>
+            </div>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">API 地址</span>
+              <input
+                value={draftTextBaseUrl}
+                onChange={(event) => setDraftTextBaseUrl(event.target.value)}
+                className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                placeholder={`例如：${DEFAULT_TEXT_API_BASE}`}
+              />
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">API Key</span>
+              <input
+                value={draftTextKey}
+                onChange={(event) => setDraftTextKey(event.target.value)}
+                className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                type="password"
+                placeholder="sk-..."
+              />
+            </label>
+          </section>
 
           <div className="rounded-lg border bg-muted p-3 text-xs leading-5 text-muted-foreground">
-            建议填写到 <span className="font-mono">/v1</span>，例如{" "}
-            <span className="font-mono">https://laodeng.chat/v1</span>
-            。如果只填域名，程序也会自动补齐。
+            当前生图模型默认使用{" "}
+            <span className="font-mono">{imageDefaultApiBaseUrl}</span>
+            ，语言模型默认使用{" "}
+            <span className="font-mono">{DEFAULT_TEXT_API_BASE}</span>。
+            配置只保存在本机。
           </div>
         </div>
 
@@ -1479,7 +1836,18 @@ function ApiSettingsDialog({
             <Button variant="outline" onClick={onClose}>
               取消
             </Button>
-            <Button onClick={() => onSave(draftBaseUrl, draftKey)}>保存</Button>
+            <Button
+              onClick={() =>
+                onSave(
+                  draftBaseUrl,
+                  draftKey,
+                  draftTextBaseUrl,
+                  draftTextKey
+                )
+              }
+            >
+              保存
+            </Button>
           </div>
         </footer>
       </article>
