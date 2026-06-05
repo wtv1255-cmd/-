@@ -265,8 +265,6 @@ export function ImageWorkbench() {
   const selectedModelLabel =
     IMAGE_MODELS.find((item) => item.value === selectedModel)?.label ||
     selectedModel
-  const selectedModelDefaultApiBaseUrl =
-    defaultImageApiProfile(selectedModel).apiBaseUrl
   const imageApiConfigured = Boolean(
     settings.apiBaseUrl.trim() && settings.apiKey.trim()
   )
@@ -337,6 +335,10 @@ export function ImageWorkbench() {
   useEffect(() => {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
   }, [settings])
+
+  useEffect(() => {
+    router.prefetch("/")
+  }, [router])
 
   useEffect(() => {
     if (!promptId) return
@@ -766,22 +768,15 @@ export function ImageWorkbench() {
   }
 
   const saveApiSettings = (
-    apiBaseUrl: string,
-    apiKey: string,
+    nextModelApiProfiles: Record<string, ImageModelApiProfile>,
     textApiBaseUrl: string,
     textApiKey: string
   ) => {
     setSettings((current) => {
       const model = normalizeImageModel(current.model)
-      const modelApiProfiles = normalizeStoredModelApiProfiles(
-        current.modelApiProfiles
-      )
-      const activeImageProfile = {
-        apiBaseUrl:
-          cleanApiBaseUrl(apiBaseUrl) || defaultImageApiProfile(model).apiBaseUrl,
-        apiKey: apiKey.trim(),
-      }
-      modelApiProfiles[model] = activeImageProfile
+      const modelApiProfiles =
+        normalizeStoredModelApiProfiles(nextModelApiProfiles)
+      const activeImageProfile = readImageApiProfile(modelApiProfiles, model)
 
       return {
         ...current,
@@ -796,32 +791,6 @@ export function ImageWorkbench() {
     })
     setApiSettingsOpen(false)
     showToast("API 配置已保存")
-  }
-
-  const clearApiSettings = () => {
-    setSettings((current) => {
-      const model = normalizeImageModel(current.model)
-      const modelApiProfiles = normalizeStoredModelApiProfiles(
-        current.modelApiProfiles
-      )
-      const activeImageProfile = {
-        ...defaultImageApiProfile(model),
-        apiKey: "",
-      }
-      modelApiProfiles[model] = activeImageProfile
-
-      return {
-        ...current,
-        model,
-        apiBaseUrl: activeImageProfile.apiBaseUrl,
-        apiKey: "",
-        modelApiProfiles,
-        textApiBaseUrl: DEFAULT_TEXT_API_BASE,
-        textApiKey: "",
-      }
-    })
-    setApiSettingsOpen(false)
-    showToast("当前生图模型和语言模型配置已清空")
   }
 
   return (
@@ -858,7 +827,12 @@ export function ImageWorkbench() {
             <SettingsIcon className="size-4" />
             设置
           </Button>
-          <Button variant="outline" onClick={() => router.push("/")}>
+          <Button
+            variant="outline"
+            onMouseEnter={() => router.prefetch("/")}
+            onFocus={() => router.prefetch("/")}
+            onClick={() => router.push("/")}
+          >
             <BookOpen className="size-4" />
             提示词
           </Button>
@@ -1020,6 +994,8 @@ export function ImageWorkbench() {
                         <Button
                           size="sm"
                           variant="outline"
+                          onMouseEnter={() => router.prefetch("/")}
+                          onFocus={() => router.prefetch("/")}
                           onClick={() => router.push("/")}
                         >
                           <BookOpen className="size-3.5" />
@@ -1262,15 +1238,13 @@ export function ImageWorkbench() {
       />
       <ApiSettingsDialog
         open={apiSettingsOpen}
+        imageModel={selectedModel}
         imageModelLabel={selectedModelLabel}
-        imageDefaultApiBaseUrl={selectedModelDefaultApiBaseUrl}
-        apiBaseUrl={settings.apiBaseUrl}
-        apiKey={settings.apiKey}
+        modelApiProfiles={settings.modelApiProfiles}
         textApiBaseUrl={settings.textApiBaseUrl}
         textApiKey={settings.textApiKey}
         onClose={() => setApiSettingsOpen(false)}
         onSave={saveApiSettings}
-        onClear={clearApiSettings}
       />
 
       {toast ? (
@@ -1687,46 +1661,58 @@ function SettingsPanel({
 
 function ApiSettingsDialog({
   open,
+  imageModel,
   imageModelLabel,
-  imageDefaultApiBaseUrl,
-  apiBaseUrl,
-  apiKey,
+  modelApiProfiles,
   textApiBaseUrl,
   textApiKey,
   onClose,
   onSave,
-  onClear,
 }: {
   open: boolean
+  imageModel: string
   imageModelLabel: string
-  imageDefaultApiBaseUrl: string
-  apiBaseUrl: string
-  apiKey: string
+  modelApiProfiles: Record<string, ImageModelApiProfile>
   textApiBaseUrl: string
   textApiKey: string
   onClose: () => void
   onSave: (
-    apiBaseUrl: string,
-    apiKey: string,
+    modelApiProfiles: Record<string, ImageModelApiProfile>,
     textApiBaseUrl: string,
     textApiKey: string
   ) => void
-  onClear: () => void
 }) {
-  const [draftBaseUrl, setDraftBaseUrl] = useState(apiBaseUrl)
-  const [draftKey, setDraftKey] = useState(apiKey)
+  const [draftModel, setDraftModel] = useState(imageModel)
+  const [draftProfiles, setDraftProfiles] = useState<
+    Record<string, ImageModelApiProfile>
+  >(() => normalizeStoredModelApiProfiles(modelApiProfiles))
   const [draftTextBaseUrl, setDraftTextBaseUrl] = useState(textApiBaseUrl)
   const [draftTextKey, setDraftTextKey] = useState(textApiKey)
 
   useEffect(() => {
     if (!open) return
-    setDraftBaseUrl(apiBaseUrl)
-    setDraftKey(apiKey)
+    setDraftModel(imageModel)
+    setDraftProfiles(normalizeStoredModelApiProfiles(modelApiProfiles))
     setDraftTextBaseUrl(textApiBaseUrl)
     setDraftTextKey(textApiKey)
-  }, [apiBaseUrl, apiKey, textApiBaseUrl, textApiKey, open])
+  }, [imageModel, modelApiProfiles, textApiBaseUrl, textApiKey, open])
 
   if (!open) return null
+
+  const selectedModelLabel =
+    IMAGE_MODELS.find((item) => item.value === draftModel)?.label || draftModel
+  const selectedDefaultProfile = defaultImageApiProfile(draftModel)
+  const selectedProfile = readImageApiProfile(draftProfiles, draftModel)
+  const updateSelectedProfile = (patch: Partial<ImageModelApiProfile>) => {
+    setDraftProfiles((current) => {
+      const profiles = normalizeStoredModelApiProfiles(current)
+      profiles[draftModel] = {
+        ...readImageApiProfile(profiles, draftModel),
+        ...patch,
+      }
+      return profiles
+    })
+  }
 
   return (
     <div
@@ -1738,14 +1724,14 @@ function ApiSettingsDialog({
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <article className="w-full max-w-2xl overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-2xl">
+      <article className="w-full max-w-4xl overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-2xl">
         <header className="flex items-start justify-between gap-3 border-b px-5 py-4">
           <div>
             <h2 id="api-settings-title" className="text-base font-semibold">
               API 设置
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              每个生图模型都有独立 Base URL 和 Key；语言模型单独配置。
+              当前工作台模型是 {imageModelLabel}。每个生图模型都有独立 Base URL 和 Key。
             </p>
           </div>
           <Button
@@ -1759,35 +1745,93 @@ function ApiSettingsDialog({
         </header>
 
         <div className="grid gap-5 p-5">
-          <section className="grid gap-3 rounded-lg border bg-background p-4">
-            <div>
-              <h3 className="text-sm font-semibold">
-                生图 API：{imageModelLabel}
-              </h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                只影响当前选中的生图模型，切换模型后可配置另一套地址和 Key。
-              </p>
+          <section className="grid gap-4 rounded-lg border bg-background p-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <div className="grid content-start gap-2">
+              <div>
+                <h3 className="text-sm font-semibold">生图模型 API</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  点击模型后编辑对应地址和 Key。
+                </p>
+              </div>
+              <div className="grid gap-1.5">
+                {IMAGE_MODELS.map((item) => {
+                  const profile = readImageApiProfile(draftProfiles, item.value)
+                  const active = draftModel === item.value
+                  const configured = Boolean(profile.apiKey.trim())
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={cn(
+                        "flex min-h-10 items-center justify-between gap-2 rounded-md border px-3 text-left text-xs transition",
+                        active
+                          ? "border-foreground bg-foreground text-background"
+                          : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                      onClick={() => setDraftModel(item.value)}
+                    >
+                      <span className="min-w-0 truncate">{item.label}</span>
+                      <span className="shrink-0 opacity-75">
+                        {configured ? "已配置" : "未配置"}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">API 地址</span>
-              <input
-                value={draftBaseUrl}
-                onChange={(event) => setDraftBaseUrl(event.target.value)}
-                className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
-                placeholder={`例如：${imageDefaultApiBaseUrl}`}
-              />
-            </label>
 
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">API Key</span>
-              <input
-                value={draftKey}
-                onChange={(event) => setDraftKey(event.target.value)}
-                className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
-                type="password"
-                placeholder="sk-..."
-              />
-            </label>
+            <div className="grid gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">
+                  {selectedModelLabel}
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  默认地址：{" "}
+                  <span className="font-mono">
+                    {selectedDefaultProfile.apiBaseUrl}
+                  </span>
+                </p>
+              </div>
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">API 地址</span>
+                <input
+                  value={selectedProfile.apiBaseUrl}
+                  onChange={(event) =>
+                    updateSelectedProfile({
+                      apiBaseUrl: event.target.value,
+                    })
+                  }
+                  className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                  placeholder={`例如：${selectedDefaultProfile.apiBaseUrl}`}
+                />
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">API Key</span>
+                <input
+                  value={selectedProfile.apiKey}
+                  onChange={(event) =>
+                    updateSelectedProfile({ apiKey: event.target.value })
+                  }
+                  className="h-9 rounded-lg border bg-muted px-3 text-sm outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                  type="password"
+                  placeholder="sk-..."
+                />
+              </label>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  updateSelectedProfile({
+                    apiBaseUrl: selectedDefaultProfile.apiBaseUrl,
+                    apiKey: "",
+                  })
+                }
+              >
+                清空当前生图模型
+              </Button>
+            </div>
           </section>
 
           <section className="grid gap-3 rounded-lg border bg-background p-4">
@@ -1820,18 +1864,16 @@ function ApiSettingsDialog({
           </section>
 
           <div className="rounded-lg border bg-muted p-3 text-xs leading-5 text-muted-foreground">
-            当前生图模型默认使用{" "}
-            <span className="font-mono">{imageDefaultApiBaseUrl}</span>
-            ，语言模型默认使用{" "}
+            生图模型之间的配置互不覆盖；语言模型默认使用{" "}
             <span className="font-mono">{DEFAULT_TEXT_API_BASE}</span>。
             配置只保存在本机。
           </div>
         </div>
 
         <footer className="flex items-center justify-between gap-3 border-t bg-background px-5 py-3">
-          <Button variant="outline" onClick={onClear}>
-            清空配置
-          </Button>
+          <span className="text-xs text-muted-foreground">
+            保存后立即用于当前工作台模型。
+          </span>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>
               取消
@@ -1839,8 +1881,7 @@ function ApiSettingsDialog({
             <Button
               onClick={() =>
                 onSave(
-                  draftBaseUrl,
-                  draftKey,
+                  draftProfiles,
                   draftTextBaseUrl,
                   draftTextKey
                 )

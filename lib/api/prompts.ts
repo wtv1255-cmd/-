@@ -223,16 +223,30 @@ export async function fetchAllPrompts(
 }
 
 export async function syncPromptSources(category?: string) {
-  const response = await fetch("/api/prompts/sync", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(
-      category && category !== ALL_PROMPTS_OPTION ? { category } : {}
-    ),
-  })
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 65_000)
+  let response: Response
+
+  try {
+    response = await fetch("/api/prompts/sync", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        category && category !== ALL_PROMPTS_OPTION ? { category } : {}
+      ),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("同步超时：全量同步需要访问多个 GitHub 源，请稍后再试或先选择单个分类同步。")
+    }
+    throw new Error("同步接口连接失败，请确认本地后端已启动")
+  } finally {
+    window.clearTimeout(timeout)
+  }
 
   let result: unknown
   try {

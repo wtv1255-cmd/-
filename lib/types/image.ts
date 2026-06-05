@@ -130,10 +130,10 @@ export const IMAGE_SOURCE_PROMPT_STORAGE_KEY =
 
 export const IMAGE_MODELS = [
   { label: "Agnes Image 2.1 Flash", value: "agnes-image-2.1-flash" },
-  { label: "gpt-image-2-1K", value: "gpt-image-2-1K" },
-  { label: "gpt-image-2-2K", value: "gpt-image-2-2K" },
-  { label: "gpt-image-2-4K", value: "gpt-image-2-4K" },
-  { label: "gpt-image-2", value: "gpt-image-2" },
+  { label: "GPT Image 2.0", value: "gpt-image-2" },
+  { label: "GPT Image 2.0 1K", value: "gpt-image-2-1K" },
+  { label: "GPT Image 2.0 2K", value: "gpt-image-2-2K" },
+  { label: "GPT Image 2.0 4K", value: "gpt-image-2-4K" },
 ] as const
 
 export const DEFAULT_IMAGE_MODEL_API_PROFILES: Record<

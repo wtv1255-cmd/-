@@ -39,6 +39,58 @@ function sortedUnique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
 }
 
+function promptQueryCacheKey(query: {
+  keyword?: string
+  tags?: string[]
+  category?: string
+}) {
+  return JSON.stringify({
+    keyword: (query.keyword || "").trim(),
+    tags: [...(query.tags || [])].sort(),
+    category: query.category || ALL_PROMPTS_OPTION,
+  })
+}
+
+const promptResponseCache = new Map<string, PromptListResponse>()
+const promptResponseRequests = new Map<string, Promise<PromptListResponse>>()
+
+function fetchAllPromptsCached(
+  query: { keyword?: string; tags?: string[]; category?: string },
+  force = false
+) {
+  const cacheKey = promptQueryCacheKey(query)
+  const currentRequest = promptResponseRequests.get(cacheKey)
+  if (currentRequest) return currentRequest
+
+  if (!force && promptResponseCache.has(cacheKey)) {
+    return Promise.resolve(promptResponseCache.get(cacheKey) as PromptListResponse)
+  }
+
+  const request = fetchAllPrompts({
+    keyword: query.keyword || "",
+    tag: query.tags || [],
+    category: query.category || ALL_PROMPTS_OPTION,
+  })
+    .then((response) => {
+      promptResponseCache.set(cacheKey, response)
+      return response
+    })
+    .finally(() => {
+      promptResponseRequests.delete(cacheKey)
+    })
+
+  promptResponseRequests.set(cacheKey, request)
+  return request
+}
+
+function readCachedPrompts(query: {
+  keyword?: string
+  tags?: string[]
+  category?: string
+}) {
+  return promptResponseCache.get(promptQueryCacheKey(query))
+}
+
 export function usePromptList({
   keyword,
   tags,
@@ -65,33 +117,43 @@ export function usePromptList({
     error: null,
   })
   const tagsKey = useMemo(() => tags.join("\u0000"), [tags])
+  const cacheQuery = useMemo(
+    () => ({ keyword, tags, category }),
+    [category, keyword, tagsKey]
+  )
 
   const refresh = useCallback(() => setRefreshKey((value) => value + 1), [])
 
   useEffect(() => {
     if (!enabled) return
 
-    const controller = new AbortController()
-    setState((current) => ({ ...current, isLoading: true, error: null }))
+    let alive = true
+    const cached = readCachedPrompts(cacheQuery)
+    setState({
+      response: cached || emptyResponse,
+      isLoading: !cached,
+      error: null,
+    })
 
-    fetchAllPrompts(
-      {
-        keyword,
-        tag: tags,
-        category,
-      },
-      controller.signal,
-    )
+    fetchAllPromptsCached(cacheQuery, refreshKey > 0)
       .then((response) => {
+        if (!alive) return
         setState({ response, isLoading: false, error: null })
       })
       .catch((error) => {
+        if (!alive) return
         if (isAbortError(error)) return
-        setState({ response: emptyResponse, isLoading: false, error: toError(error) })
+        setState((current) => ({
+          response: current.response.items.length ? current.response : emptyResponse,
+          isLoading: false,
+          error: toError(error),
+        }))
       })
 
-    return () => controller.abort()
-  }, [category, enabled, keyword, refreshKey, tags, tagsKey])
+    return () => {
+      alive = false
+    }
+  }, [cacheQuery, category, enabled, keyword, refreshKey, tagsKey])
 
   const sourceItems = useMemo(() => {
     if (source === "all") return state.response.items
@@ -126,9 +188,14 @@ export function usePromptList({
 
 export function usePromptStats(enabled = true) {
   const [refreshKey, setRefreshKey] = useState(0)
-  const [items, setItems] = useState<Prompt[]>([])
-  const [responseTotal, setResponseTotal] = useState(0)
-  const [isLoading, setIsLoading] = useState(enabled)
+  const cached = readCachedPrompts({
+    keyword: "",
+    tags: [],
+    category: ALL_PROMPTS_OPTION,
+  })
+  const [items, setItems] = useState<Prompt[]>(cached?.items || [])
+  const [responseTotal, setResponseTotal] = useState(cached?.total || 0)
+  const [isLoading, setIsLoading] = useState(enabled && !cached)
   const [error, setError] = useState<Error | null>(null)
 
   const refresh = useCallback(() => setRefreshKey((value) => value + 1), [])
@@ -136,25 +203,43 @@ export function usePromptStats(enabled = true) {
   useEffect(() => {
     if (!enabled) return
 
-    const controller = new AbortController()
-    setIsLoading(true)
+    let alive = true
+    const cached = readCachedPrompts({
+      keyword: "",
+      tags: [],
+      category: ALL_PROMPTS_OPTION,
+    })
+    if (cached) {
+      setItems(cached.items)
+      setResponseTotal(cached.total)
+    }
+    setIsLoading(!cached)
     setError(null)
 
-    fetchAllPrompts({}, controller.signal)
+    fetchAllPromptsCached(
+      { keyword: "", tags: [], category: ALL_PROMPTS_OPTION },
+      refreshKey > 0
+    )
       .then((response) => {
+        if (!alive) return
         setItems(response.items)
         setResponseTotal(response.total)
         setIsLoading(false)
       })
       .catch((error) => {
+        if (!alive) return
         if (isAbortError(error)) return
-        setItems([])
-        setResponseTotal(0)
+        if (!items.length) {
+          setItems([])
+          setResponseTotal(0)
+        }
         setError(toError(error))
         setIsLoading(false)
       })
 
-    return () => controller.abort()
+    return () => {
+      alive = false
+    }
   }, [enabled, refreshKey])
 
   const stats = useMemo<PromptStats>(() => {

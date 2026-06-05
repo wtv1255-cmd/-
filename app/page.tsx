@@ -128,6 +128,10 @@ export default function Page() {
 
   const showToast = (message: string) => setToast(message)
 
+  useEffect(() => {
+    router.prefetch("/image")
+  }, [router])
+
   const copyPrompt = async (prompt: Prompt) => {
     try {
       await navigator.clipboard.writeText(prompt.prompt)
@@ -185,6 +189,11 @@ export default function Page() {
     try {
       const syncCategory =
         category === ALL_PROMPTS_OPTION ? undefined : category
+      showToast(
+        syncCategory
+          ? "正在同步当前分类"
+          : "正在全量同步，通常需要 30-60 秒"
+      )
       const result = await syncPromptSources(syncCategory)
       stats.refresh()
       promptList.refresh()
@@ -232,7 +241,12 @@ export default function Page() {
           <Button variant="outline" onClick={() => setSelectOpen(true)}>
             选择提示词
           </Button>
-          <Button variant="outline" onClick={() => router.push("/image")}>
+          <Button
+            variant="outline"
+            onMouseEnter={() => router.prefetch("/image")}
+            onFocus={() => router.prefetch("/image")}
+            onClick={() => router.push("/image")}
+          >
             <ImagePlus className="size-4" />
             图片工作台
           </Button>
