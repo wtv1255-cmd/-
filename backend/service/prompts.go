@@ -41,7 +41,14 @@ func ensureLocalPromptCategories() error {
 			return
 		}
 		if int(count) == len(items) {
-			return
+			isCurrent, err := repository.PromptCategoryMatches(yanaiBananaPromptCategory, items)
+			if err != nil {
+				localPromptEnsureErr = err
+				return
+			}
+			if isCurrent {
+				return
+			}
 		}
 		category, ok := repository.PromptCategoryByCode(yanaiBananaPromptCategory)
 		if !ok {

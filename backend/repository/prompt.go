@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/basketikun/infinite-canvas/model"
 	"gorm.io/gorm"
 )
@@ -38,6 +40,32 @@ func CountPromptCategory(category string) (int64, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// PromptCategoryMatches 检查已导入分类的关键字段是否仍与内置数据一致。
+func PromptCategoryMatches(category string, expected []model.Prompt) (bool, error) {
+	if len(expected) == 0 {
+		count, err := CountPromptCategory(category)
+		return count == 0, err
+	}
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	for _, item := range expected {
+		var existing model.Prompt
+		err := db.Select("id", "cover_url", "preview").Where("category = ? AND id = ?", category, item.ID).First(&existing).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if existing.CoverURL != item.CoverURL || existing.Preview != item.Preview {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // ListPrompts 按查询条件返回提示词分页列表。

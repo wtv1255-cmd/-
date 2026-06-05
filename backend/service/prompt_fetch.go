@@ -25,7 +25,7 @@ const (
 	youMindNanoBananaProRawBase  = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main"
 	davidWuGptImage2RawBase      = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main"
 	yanaiBananaPromptCategory    = "yanai-banana-prompts"
-	yanaiBananaPromptRawBase     = "https://raw.githubusercontent.com/glidea/banana-prompt-quicker/main"
+	yanaiBananaPromptRawBase     = "https://raw.githubusercontent.com/huaiyuechusan/YanAI/main/web/public/banana-prompt-quicker"
 )
 
 var gptImage2CaseFiles = []string{"README.md", "cases/ad-creative.md", "cases/character.md", "cases/comparison.md", "cases/ecommerce.md", "cases/portrait.md", "cases/poster.md", "cases/ui.md"}
