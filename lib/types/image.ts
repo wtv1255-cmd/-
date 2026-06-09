@@ -30,7 +30,7 @@ export type ImageSettings = {
   textApiKey: string
 }
 
-export const DEFAULT_CODEX_PROXY_API_BASE = "https://api.xxiaozhi.com"
+export const DEFAULT_CODEX_PROXY_API_BASE = "https://www.521xxz.com"
 export const DEFAULT_AGNES_IMAGE_API_BASE = "https://apihub.agnes-ai.com/v1"
 export const DEFAULT_TEXT_API_BASE = "https://ai.hybgzs.com/v1"
 
@@ -356,8 +356,7 @@ export const YANAI_IMAGE_PROMPT_PRESETS: ImagePromptPreset[] = [
   },
 ]
 
-export const DEFAULT_NEGATIVE_PROMPT_SUFFIX =
-  "不要二次元，不要3D CG，不要摄影棚大片，不要低质粗糙照片，不要过度噪点，不要明显脏感，不要过度磨皮，不要塑料皮肤，不要畸形手指，不要多余手指，不要背景纯白。"
+export const DEFAULT_NEGATIVE_PROMPT_SUFFIX = ""
 
 export const REVERSE_PROMPT_MODES: Array<{
   label: string

@@ -91,6 +91,8 @@ const LEGACY_IMAGE_MODEL_MAP: Record<string, string> = {
 const LEGACY_IMAGE_API_BASE_URLS = new Set([
   "https://laodeng.chat/v1",
   "https://ai.hybgzs.com/v1",
+  "https://api.xxiaozhi.com",
+  "https://api.xxiaozhi.com/v1",
 ])
 const YANAI_PROMPT_PRESET_CATEGORIES = [
   "形象建议",
@@ -912,7 +914,7 @@ export function ImageWorkbench() {
             <div className="truncate text-xs text-muted-foreground">
               {sourcePrompt
                 ? `来自提示词：${sourcePrompt.title}`
-                : "CodexProxy 生图和本地图库"}
+                : "生图工作台和本地图库"}
             </div>
           </div>
         </div>
@@ -1649,9 +1651,7 @@ function SettingsPanel({
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">参数</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            保留 CodexProxy 生图参数
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground">生图模型参数</p>
         </div>
         <Button
           size="icon"

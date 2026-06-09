@@ -1,10 +1,11 @@
 import {
   buildImageJsonPayload,
   forwardCodexImageJson,
+  isAgnesImageModel,
 } from "@/lib/server/codex-proxy"
 
 export const runtime = "nodejs"
-export const maxDuration = 300
+export const maxDuration = 900
 
 export async function POST(request: Request) {
   const input = await request.json()
@@ -14,5 +15,13 @@ export async function POST(request: Request) {
     return Response.json({ error: result.error }, { status: 400 })
   }
 
-  return forwardCodexImageJson("/v1/images/generations", result.payload, result.apiBaseUrl, result.apiKey)
+  return forwardCodexImageJson(
+    isAgnesImageModel(String(input.model || ""))
+      ? "/v1/images/generations"
+      : "/v1/videos",
+    result.payload,
+    result.apiBaseUrl,
+    result.apiKey,
+    result.count
+  )
 }

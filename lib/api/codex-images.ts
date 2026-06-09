@@ -36,15 +36,10 @@ type RewritePromptInput = {
 
 type OptimizePromptInput = RewritePromptInput
 
-function composePrompt(prompt: string, style: string, negativePrompt = "") {
+function composePrompt(prompt: string, style: string) {
   const cleanPrompt = prompt.trim()
   const cleanStyle = style.trim()
-  const cleanNegativePrompt = negativePrompt.trim()
-  return [
-    cleanPrompt,
-    cleanStyle ? `风格要求：${cleanStyle}` : "",
-    cleanNegativePrompt ? `负面要求：${cleanNegativePrompt}` : "",
-  ]
+  return [cleanPrompt, cleanStyle ? `风格要求：${cleanStyle}` : ""]
     .filter(Boolean)
     .join("\n\n")
 }
@@ -94,7 +89,8 @@ function buildPayload({
   settings,
 }: RequestImagesInput) {
   return {
-    prompt: composePrompt(prompt, style, negativePrompt),
+    prompt: composePrompt(prompt, style),
+    negative_prompt: negativePrompt?.trim() || undefined,
     model: settings.model,
     size: settings.size,
     quality: settings.quality,
