@@ -305,15 +305,43 @@ type ImagePreview = {
   filename?: string
 }
 
+type GenerationResultContext = {
+  prompt: string
+  settings: SafeImageSettings
+  sourcePrompt: SourcePromptSnapshot | null
+}
+
+type QueuedGenerationResult = GenerationResult & {
+  batchId: string
+  context: GenerationResultContext
+}
+
 type GenerationSessionSnapshot = {
-  results: GenerationResult[]
+  results: QueuedGenerationResult[]
   isRunning: boolean
+  version: number
+}
+
+type QueuedGenerationJob = {
+  id: string
+  resultIds: string[]
+  mode: ImageMode
+  prompt: string
+  style: string
+  negativePrompt: string
+  settings: ImageSettings
+  references: ImageReference[]
+  context: GenerationResultContext
+  version: number
 }
 
 let generationSessionSnapshot: GenerationSessionSnapshot = {
   results: [],
   isRunning: false,
+  version: 0,
 }
+const generationJobQueue: QueuedGenerationJob[] = []
+let generationQueueProcessing = false
 
 const generationSessionListeners = new Set<
   (snapshot: GenerationSessionSnapshot) => void
@@ -340,8 +368,8 @@ function subscribeGenerationSession(
 
 function setGenerationResults(
   value:
-    | GenerationResult[]
-    | ((current: GenerationResult[]) => GenerationResult[])
+    | QueuedGenerationResult[]
+    | ((current: QueuedGenerationResult[]) => QueuedGenerationResult[])
 ) {
   generationSessionSnapshot = {
     ...generationSessionSnapshot,
@@ -362,11 +390,105 @@ function setGenerationRunning(isRunning: boolean) {
 }
 
 function resetGenerationSession() {
+  generationJobQueue.length = 0
   generationSessionSnapshot = {
     results: [],
     isRunning: false,
+    version: generationSessionSnapshot.version + 1,
   }
   emitGenerationSession()
+}
+
+function enqueueGenerationJob(job: QueuedGenerationJob) {
+  generationJobQueue.push(job)
+  generationSessionSnapshot = {
+    ...generationSessionSnapshot,
+    isRunning: true,
+    results: [
+      ...generationSessionSnapshot.results,
+      ...job.resultIds.map((id) => ({
+        id,
+        batchId: job.id,
+        status: "pending" as const,
+        context: job.context,
+      })),
+    ],
+  }
+  emitGenerationSession()
+  void processGenerationQueue()
+}
+
+function patchGenerationResult(
+  id: string,
+  patch: Partial<Omit<QueuedGenerationResult, "id">>,
+  version: number
+) {
+  if (version !== generationSessionSnapshot.version) return
+  setGenerationResults((current) =>
+    current.map((item) => (item.id === id ? { ...item, ...patch } : item))
+  )
+}
+
+async function processGenerationQueue() {
+  if (generationQueueProcessing) return
+  generationQueueProcessing = true
+
+  while (generationJobQueue.length) {
+    const job = generationJobQueue.shift()
+    if (!job || job.version !== generationSessionSnapshot.version) continue
+
+    const startedAt = performance.now()
+    await Promise.all(
+      job.resultIds.map(async (slotId) => {
+        try {
+          const images =
+            job.mode === "edit"
+              ? await requestImageEdit({
+                  prompt: job.prompt,
+                  style: job.style,
+                  negativePrompt: job.negativePrompt,
+                  settings: { ...job.settings, count: 1 },
+                  references: job.references,
+                })
+              : await requestImageGeneration({
+                  prompt: job.prompt,
+                  style: job.style,
+                  negativePrompt: job.negativePrompt,
+                  settings: { ...job.settings, count: 1 },
+                })
+
+          const image = images[0]
+          if (!image) throw new Error("接口没有返回图片")
+
+          const generated = await imageResultToGeneratedImage(
+            image,
+            performance.now() - startedAt
+          )
+          patchGenerationResult(
+            slotId,
+            { status: "success", image: generated },
+            job.version
+          )
+        } catch (error) {
+          patchGenerationResult(
+            slotId,
+            {
+              status: "failed",
+              error: error instanceof Error ? error.message : "生成失败",
+            },
+            job.version
+          )
+        }
+      })
+    )
+  }
+
+  generationQueueProcessing = false
+  if (
+    !generationSessionSnapshot.results.some((item) => item.status === "pending")
+  ) {
+    setGenerationRunning(false)
+  }
 }
 
 export function ImageWorkbench() {
@@ -441,9 +563,7 @@ export function ImageWorkbench() {
     Math.min(10, Math.floor(Math.abs(Number(settings.count)) || 1))
   )
   const canGenerate =
-    Boolean(prompt.trim()) &&
-    !isRunning &&
-    (mode === "text" || references.length > 0)
+    Boolean(prompt.trim()) && (mode === "text" || references.length > 0)
 
   const refreshLibrary = useCallback(async () => {
     setLibrary(await listLocalImageCards())
@@ -625,81 +745,28 @@ export function ImageWorkbench() {
       return
     }
 
-    const startedAt = performance.now()
-    const controller = new AbortController()
-    const pendingResults = Array.from({ length: generationCount }, () => ({
+    const requestSettings = applyActiveImageApiProfile(settings)
+    const job: QueuedGenerationJob = {
       id: crypto.randomUUID(),
-      status: "pending" as const,
-    }))
-    let successCount = 0
-    let failedCount = 0
-    let firstError = ""
-
-    setGenerationRunning(true)
-    setGenerationResults(pendingResults)
-
-    await Promise.all(
-      pendingResults.map(async (slot) => {
-        try {
-          const requestSettings = applyActiveImageApiProfile(settings)
-          const images =
-            mode === "edit"
-              ? await requestImageEdit({
-                  prompt,
-                  style,
-                  negativePrompt,
-                  settings: { ...requestSettings, count: 1 },
-                  references,
-                  signal: controller.signal,
-                })
-              : await requestImageGeneration({
-                  prompt,
-                  style,
-                  negativePrompt,
-                  settings: { ...requestSettings, count: 1 },
-                  signal: controller.signal,
-                })
-
-          const image = images[0]
-          if (!image) throw new Error("接口没有返回图片")
-
-          const generated = await imageResultToGeneratedImage(
-            image,
-            performance.now() - startedAt
-          )
-          successCount += 1
-          setGenerationResults((current) =>
-            current.map((item) =>
-              item.id === slot.id
-                ? { id: slot.id, status: "success", image: generated }
-                : item
-            )
-          )
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "生成失败"
-          failedCount += 1
-          if (!firstError) firstError = message
-          setGenerationResults((current) =>
-            current.map((item) =>
-              item.id === slot.id
-                ? { id: slot.id, status: "failed", error: message }
-                : item
-            )
-          )
-        }
-      })
-    )
-
-    if (successCount) {
-      showToast(
-        failedCount
-          ? `已生成 ${successCount} 张图片，${failedCount} 张失败`
-          : `已生成 ${successCount} 张图片`
-      )
-    } else {
-      showToast(firstError || "生成失败")
+      resultIds: Array.from({ length: generationCount }, () =>
+        crypto.randomUUID()
+      ),
+      mode,
+      prompt,
+      style,
+      negativePrompt,
+      settings: requestSettings,
+      references: [...references],
+      context: {
+        prompt,
+        settings: toSafeImageSettings(requestSettings),
+        sourcePrompt,
+      },
+      version: getGenerationSessionSnapshot().version,
     }
-    setGenerationRunning(false)
+
+    enqueueGenerationJob(job)
+    showToast(isRunning ? "已加入生成队列" : "已开始生成")
   }
 
   const reversePrompt = async () => {
@@ -821,26 +888,31 @@ export function ImageWorkbench() {
     }
   }
 
-  const saveResult = async (image: GeneratedImage) => {
-    const title = sourcePrompt?.title || prompt.slice(0, 24) || "生成图片"
+  const saveResult = async (result: QueuedGenerationResult) => {
+    if (!result.image) return
+
+    const title =
+      result.context.sourcePrompt?.title ||
+      result.context.prompt.slice(0, 24) ||
+      "生成图片"
     await saveLocalImageCard({
-      blob: image.blob,
+      blob: result.image.blob,
       title,
-      prompt,
-      tags: sourcePrompt?.tags || [],
-      settings: toSafeImageSettings(settings),
-      sourcePrompt,
+      prompt: result.context.prompt,
+      tags: result.context.sourcePrompt?.tags || [],
+      settings: result.context.settings,
+      sourcePrompt: result.context.sourcePrompt,
     })
     await refreshLibrary()
     showToast("已保存到我的图库")
   }
 
   const saveAllResults = async () => {
-    const successImages = results.flatMap((item) =>
-      item.status === "success" && item.image ? [item.image] : []
+    const successResults = results.filter(
+      (item) => item.status === "success" && item.image
     )
-    for (const image of successImages) {
-      await saveResult(image)
+    for (const item of successResults) {
+      await saveResult(item)
     }
   }
 
@@ -1360,7 +1432,11 @@ export function ImageWorkbench() {
                     ) : (
                       <Sparkles className="size-4" />
                     )}
-                    {mode === "edit" ? "用参考图生成" : "生成图片"}
+                    {isRunning
+                      ? "加入队列"
+                      : mode === "edit"
+                        ? "用参考图生成"
+                        : "生成图片"}
                   </Button>
 
                   {mode === "edit" && references.length === 0 ? (
@@ -2340,14 +2416,9 @@ function ResultCard({
   isRewritingPrompt,
   onPreview,
 }: {
-  result: {
-    id: string
-    status: "pending" | "success" | "failed"
-    image?: GeneratedImage
-    error?: string
-  }
+  result: QueuedGenerationResult
   index: number
-  onSave: (image: GeneratedImage) => Promise<void>
+  onSave: (result: QueuedGenerationResult) => Promise<void>
   onUseReference: (image: GeneratedImage) => void
   onSafetyRewrite: () => void
   isRewritingPrompt: boolean
@@ -2359,6 +2430,9 @@ function ResultCard({
         <div className="text-center text-sm text-zinc-400">
           <Loader2 className="mx-auto mb-2 size-6 animate-spin" />
           生成中
+          <div className="mt-1 font-mono text-xs text-zinc-500">
+            #{index + 1}
+          </div>
         </div>
       </div>
     )
@@ -2422,7 +2496,7 @@ function ResultCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void onSave(image)}
+            onClick={() => void onSave(result)}
           >
             <FolderOpen className="size-3.5" />
             入库
@@ -2473,7 +2547,7 @@ function GenerationProgress({
           {isRunning ? (
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           ) : null}
-          <span>{isRunning ? "生成中" : "生成完成"}</span>
+          <span>{isRunning ? "队列生成中" : "队列完成"}</span>
         </div>
         <span className="font-mono text-xs text-muted-foreground">
           {done}/{total} · {percent}%
