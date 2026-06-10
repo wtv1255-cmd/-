@@ -9,7 +9,10 @@ import {
   getCategoryLabel,
   getPromptSourceLabel,
 } from "@/lib/api/prompts"
-import { resolvePromptImageUrl } from "@/lib/image-proxy"
+import {
+  getPromptPrimaryImageUrl,
+  resolvePromptImageUrl,
+} from "@/lib/image-proxy"
 import type { Prompt, PromptViewMode } from "@/lib/types/prompt"
 import { cn } from "@/lib/utils"
 
@@ -26,21 +29,25 @@ export function PromptVisual({
 }) {
   const [useOriginalImage, setUseOriginalImage] = useState(false)
   const [imageFailed, setImageFailed] = useState(false)
+  const sourceImageUrl = getPromptPrimaryImageUrl(
+    prompt.coverUrl,
+    prompt.preview
+  )
   const resolvedLabel =
     label === undefined
-      ? `${getCategoryLabel(prompt.category)} · ${prompt.coverUrl ? "图片样例" : "无图片"}`
+      ? `${getCategoryLabel(prompt.category)} · ${sourceImageUrl ? "图片样例" : "无图片"}`
       : label
-  const proxiedImageUrl = resolvePromptImageUrl(prompt.coverUrl)
+  const proxiedImageUrl = resolvePromptImageUrl(sourceImageUrl)
   const imageUrl = imageFailed
     ? ""
     : useOriginalImage
-      ? prompt.coverUrl
+      ? sourceImageUrl
       : proxiedImageUrl
 
   useEffect(() => {
     setUseOriginalImage(false)
     setImageFailed(false)
-  }, [prompt.coverUrl])
+  }, [sourceImageUrl])
 
   return (
     <div
@@ -60,7 +67,7 @@ export function PromptVisual({
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => {
-            if (!useOriginalImage && prompt.coverUrl !== proxiedImageUrl) {
+            if (!useOriginalImage && sourceImageUrl !== proxiedImageUrl) {
               setUseOriginalImage(true)
               return
             }
@@ -73,7 +80,7 @@ export function PromptVisual({
           <div className="absolute inset-4 rounded-md border border-white/70 bg-white/45" />
           <div className="absolute inset-4 rounded-md bg-[linear-gradient(rgba(15,23,42,.06)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.06)_1px,transparent_1px)] bg-[length:18px_18px]" />
           <ImageIcon className="absolute top-3 right-3 size-4 text-muted-foreground/70" />
-          {prompt.coverUrl && imageFailed ? (
+          {sourceImageUrl && imageFailed ? (
             <span className="absolute inset-x-4 top-1/2 -translate-y-1/2 text-center text-xs text-muted-foreground">
               图片加载失败
             </span>

@@ -11,7 +11,10 @@ import {
   getPromptSourceLabel,
   getTagLabel,
 } from "@/lib/api/prompts"
-import { resolvePromptImageUrl } from "@/lib/image-proxy"
+import {
+  getPromptPrimaryImageUrl,
+  resolvePromptImageUrl,
+} from "@/lib/image-proxy"
 import type { Prompt } from "@/lib/types/prompt"
 import { cn } from "@/lib/utils"
 
@@ -63,7 +66,10 @@ export function PromptDetailDialog({
 
   if (!prompt) return null
 
-  const originalPreviewUrl = prompt.coverUrl || ""
+  const originalPreviewUrl = getPromptPrimaryImageUrl(
+    prompt.coverUrl,
+    prompt.preview
+  )
   const proxiedPreviewUrl = resolvePromptImageUrl(originalPreviewUrl)
   const previewUrl = previewFailed
     ? ""

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { fetchAllPrompts, getPromptSource } from "@/lib/api/prompts"
+import { getPromptPrimaryImageUrl } from "@/lib/image-proxy"
 import {
   ALL_PROMPTS_OPTION,
   type Prompt,
@@ -36,7 +37,9 @@ function isAbortError(error: unknown) {
 }
 
 function sortedUnique(values: string[]) {
-  return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+  return Array.from(new Set(values.filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b, "zh-Hans-CN")
+  )
 }
 
 function promptQueryCacheKey(query: {
@@ -63,7 +66,9 @@ function fetchAllPromptsCached(
   if (currentRequest) return currentRequest
 
   if (!force && promptResponseCache.has(cacheKey)) {
-    return Promise.resolve(promptResponseCache.get(cacheKey) as PromptListResponse)
+    return Promise.resolve(
+      promptResponseCache.get(cacheKey) as PromptListResponse
+    )
   }
 
   const request = fetchAllPrompts({
@@ -144,7 +149,9 @@ export function usePromptList({
         if (!alive) return
         if (isAbortError(error)) return
         setState((current) => ({
-          response: current.response.items.length ? current.response : emptyResponse,
+          response: current.response.items.length
+            ? current.response
+            : emptyResponse,
           isLoading: false,
           error: toError(error),
         }))
@@ -157,7 +164,9 @@ export function usePromptList({
 
   const sourceItems = useMemo(() => {
     if (source === "all") return state.response.items
-    return state.response.items.filter((item) => getPromptSource(item) === source)
+    return state.response.items.filter(
+      (item) => getPromptSource(item) === source
+    )
   }, [source, state.response.items])
 
   const filteredItems = useMemo(() => {
@@ -168,7 +177,10 @@ export function usePromptList({
   const total = filteredItems.length
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const safePage = Math.min(Math.max(page, 1), totalPages)
-  const pageItems = filteredItems.slice((safePage - 1) * pageSize, safePage * pageSize)
+  const pageItems = filteredItems.slice(
+    (safePage - 1) * pageSize,
+    safePage * pageSize
+  )
 
   return {
     items: pageItems,
@@ -259,7 +271,9 @@ export function usePromptStats(enabled = true) {
 
     return {
       total: responseTotal || items.length,
-      imageCount: items.filter((item) => item.coverUrl || item.preview).length,
+      imageCount: items.filter((item) =>
+        getPromptPrimaryImageUrl(item.coverUrl, item.preview)
+      ).length,
       tagCount: Object.keys(tagCounts).length,
       categories: sortedUnique(Object.keys(categoryCounts)),
       tags: sortedUnique(Object.keys(tagCounts)),

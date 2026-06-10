@@ -137,6 +137,15 @@ fs.writeFileSync(
         win: {
           icon: "desktop-assets/icon.ico",
         },
+        nsis: {
+          oneClick: false,
+          perMachine: false,
+          allowToChangeInstallationDirectory: true,
+          createDesktopShortcut: true,
+          createStartMenuShortcut: true,
+          shortcutName: "她火",
+          uninstallDisplayName: "她火",
+        },
         asar: false,
         npmRebuild: false,
         files: ["**/*"],
