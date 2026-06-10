@@ -63,8 +63,9 @@ export function PromptVisual({
         <img
           src={imageUrl}
           alt={prompt.title}
-          loading="lazy"
+          loading="eager"
           decoding="async"
+          fetchPriority="high"
           referrerPolicy="no-referrer"
           onError={() => {
             if (!useOriginalImage && sourceImageUrl !== proxiedImageUrl) {
