@@ -12,6 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import {
   BookOpen,
   Check,
+  ChevronDown,
   Copy,
   Download,
   FileJson,
@@ -68,6 +69,7 @@ import {
   TEXT_MODEL_OPTIONS,
   YANAI_IMAGE_PROMPT_PRESETS,
   type GeneratedImage,
+  type GenerationResult,
   type ImageMode,
   type ImageModelApiProfile,
   type ImageReference,
@@ -303,6 +305,70 @@ type ImagePreview = {
   filename?: string
 }
 
+type GenerationSessionSnapshot = {
+  results: GenerationResult[]
+  isRunning: boolean
+}
+
+let generationSessionSnapshot: GenerationSessionSnapshot = {
+  results: [],
+  isRunning: false,
+}
+
+const generationSessionListeners = new Set<
+  (snapshot: GenerationSessionSnapshot) => void
+>()
+
+function getGenerationSessionSnapshot() {
+  return generationSessionSnapshot
+}
+
+function emitGenerationSession() {
+  const snapshot = getGenerationSessionSnapshot()
+  generationSessionListeners.forEach((listener) => listener(snapshot))
+}
+
+function subscribeGenerationSession(
+  listener: (snapshot: GenerationSessionSnapshot) => void
+) {
+  generationSessionListeners.add(listener)
+  listener(getGenerationSessionSnapshot())
+  return () => {
+    generationSessionListeners.delete(listener)
+  }
+}
+
+function setGenerationResults(
+  value:
+    | GenerationResult[]
+    | ((current: GenerationResult[]) => GenerationResult[])
+) {
+  generationSessionSnapshot = {
+    ...generationSessionSnapshot,
+    results:
+      typeof value === "function"
+        ? value(generationSessionSnapshot.results)
+        : value,
+  }
+  emitGenerationSession()
+}
+
+function setGenerationRunning(isRunning: boolean) {
+  generationSessionSnapshot = {
+    ...generationSessionSnapshot,
+    isRunning,
+  }
+  emitGenerationSession()
+}
+
+function resetGenerationSession() {
+  generationSessionSnapshot = {
+    results: [],
+    isRunning: false,
+  }
+  emitGenerationSession()
+}
+
 export function ImageWorkbench() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -310,6 +376,7 @@ export function ImageWorkbench() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const reverseFileInputRef = useRef<HTMLInputElement>(null)
   const galleryImportInputRef = useRef<HTMLInputElement>(null)
+  const mountedRef = useRef(true)
   const [settings, setSettings] = useState<ImageSettings>(
     DEFAULT_IMAGE_SETTINGS
   )
@@ -324,16 +391,10 @@ export function ImageWorkbench() {
     null
   )
   const [references, setReferences] = useState<ImageReference[]>([])
-  const [results, setResults] = useState<
-    Array<{
-      id: string
-      status: "pending" | "success" | "failed"
-      image?: GeneratedImage
-      error?: string
-    }>
-  >([])
+  const [generationSession, setGenerationSession] = useState(
+    getGenerationSessionSnapshot
+  )
   const [library, setLibrary] = useState<LocalImageCard[]>([])
-  const [isRunning, setIsRunning] = useState(false)
   const [reverseImage, setReverseImage] = useState<ImageReference | null>(null)
   const [reverseMode, setReverseMode] = useState<ReversePromptMode>("reverse")
   const [textModel, setTextModel] = useState("gpt-5.5")
@@ -343,12 +404,25 @@ export function ImageWorkbench() {
   const [isRewritingPrompt, setIsRewritingPrompt] = useState(false)
   const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [corePromptOpen, setCorePromptOpen] = useState(false)
+  const [stylePanelOpen, setStylePanelOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<WorkbenchTab>("workbench")
   const [apiSettingsOpen, setApiSettingsOpen] = useState(false)
   const [previewImage, setPreviewImage] = useState<ImagePreview | null>(null)
   const [toast, setToast] = useState("")
 
   const selectedModel = settings.model
+  const results = generationSession.results
+  const isRunning = generationSession.isRunning
+  const generationDone = results.filter(
+    (item) => item.status !== "pending"
+  ).length
+  const generationSuccess = results.filter(
+    (item) => item.status === "success"
+  ).length
+  const generationFailed = results.filter(
+    (item) => item.status === "failed"
+  ).length
   const selectedModelLabel =
     IMAGE_MODELS.find((item) => item.value === selectedModel)?.label ||
     selectedModel
@@ -378,6 +452,16 @@ export function ImageWorkbench() {
   useEffect(() => {
     void refreshLibrary()
   }, [refreshLibrary])
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    return subscribeGenerationSession(setGenerationSession)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -451,7 +535,9 @@ export function ImageWorkbench() {
     }
   }, [reverseImage])
 
-  const showToast = (message: string) => setToast(message)
+  const showToast = (message: string) => {
+    if (mountedRef.current) setToast(message)
+  }
 
   const updateSetting = <K extends keyof ImageSettings>(
     key: K,
@@ -523,7 +609,7 @@ export function ImageWorkbench() {
   const clearSession = () => {
     references.forEach((item) => URL.revokeObjectURL(item.url))
     setReferences([])
-    setResults([])
+    resetGenerationSession()
     setPrompt("")
     setStyle("")
     setNegativePrompt(DEFAULT_NEGATIVE_PROMPT_SUFFIX)
@@ -549,8 +635,8 @@ export function ImageWorkbench() {
     let failedCount = 0
     let firstError = ""
 
-    setIsRunning(true)
-    setResults(pendingResults)
+    setGenerationRunning(true)
+    setGenerationResults(pendingResults)
 
     await Promise.all(
       pendingResults.map(async (slot) => {
@@ -582,7 +668,7 @@ export function ImageWorkbench() {
             performance.now() - startedAt
           )
           successCount += 1
-          setResults((current) =>
+          setGenerationResults((current) =>
             current.map((item) =>
               item.id === slot.id
                 ? { id: slot.id, status: "success", image: generated }
@@ -593,7 +679,7 @@ export function ImageWorkbench() {
           const message = error instanceof Error ? error.message : "生成失败"
           failedCount += 1
           if (!firstError) firstError = message
-          setResults((current) =>
+          setGenerationResults((current) =>
             current.map((item) =>
               item.id === slot.id
                 ? { id: slot.id, status: "failed", error: message }
@@ -613,7 +699,7 @@ export function ImageWorkbench() {
     } else {
       showToast(firstError || "生成失败")
     }
-    setIsRunning(false)
+    setGenerationRunning(false)
   }
 
   const reversePrompt = async () => {
@@ -1164,11 +1250,13 @@ export function ImageWorkbench() {
                     />
                   </label>
 
-                  <div className="grid gap-3">
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Sparkles className="size-4" />
-                      核心提示词
-                    </div>
+                  <CollapsiblePanel
+                    title="核心提示词"
+                    summary="形象建议、照片修复、写真风格"
+                    icon={<Sparkles className="size-4" />}
+                    open={corePromptOpen}
+                    onOpenChange={setCorePromptOpen}
+                  >
                     {YANAI_PROMPT_PRESET_CATEGORIES.map((category) => {
                       const items = YANAI_IMAGE_PROMPT_PRESETS.filter(
                         (item) => item.category === category
@@ -1200,41 +1288,46 @@ export function ImageWorkbench() {
                         </section>
                       )
                     })}
-                  </div>
+                  </CollapsiblePanel>
 
-                  <label className="grid gap-2">
-                    <span className="text-sm font-medium">风格</span>
-                    <input
-                      value={style}
-                      onChange={(event) => setStyle(event.target.value)}
-                      className="h-9 rounded-lg border bg-muted px-3 text-sm transition outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
-                      placeholder="可选风格词"
-                    />
-                  </label>
+                  <CollapsiblePanel
+                    title="风格"
+                    summary={style.trim() ? "已设置风格词" : "可选风格词和预设"}
+                    icon={<WandSparkles className="size-4" />}
+                    open={stylePanelOpen}
+                    onOpenChange={setStylePanelOpen}
+                  >
+                    <label className="grid gap-2">
+                      <span className="text-sm font-medium">风格词</span>
+                      <input
+                        value={style}
+                        onChange={(event) => setStyle(event.target.value)}
+                        className="h-9 rounded-lg border bg-muted px-3 text-sm transition outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
+                        placeholder="可选风格词"
+                      />
+                    </label>
 
-                  <div className="grid gap-2">
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <WandSparkles className="size-4" />
-                      风格预设
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">风格预设</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {IMAGE_STYLE_PRESETS.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={cn(
+                              "min-h-9 rounded-md border px-3 text-left text-xs transition",
+                              style === item.value
+                                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                                : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+                            )}
+                            onClick={() => setStyle(item.value)}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {IMAGE_STYLE_PRESETS.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className={cn(
-                            "min-h-9 rounded-md border px-3 text-left text-xs transition",
-                            style === item.value
-                              ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                              : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
-                          )}
-                          onClick={() => setStyle(item.value)}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  </CollapsiblePanel>
 
                   <label className="grid gap-2">
                     <span className="text-sm font-medium">负面要求</span>
@@ -1297,6 +1390,16 @@ export function ImageWorkbench() {
                     全部入库
                   </Button>
                 </div>
+
+                {results.length ? (
+                  <GenerationProgress
+                    done={generationDone}
+                    failed={generationFailed}
+                    isRunning={isRunning}
+                    success={generationSuccess}
+                    total={results.length}
+                  />
+                ) : null}
 
                 {results.length ? (
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(156px,1fr))] gap-3 sm:grid-cols-[repeat(auto-fill,minmax(180px,220px))] sm:justify-start">
@@ -1666,6 +1769,53 @@ function ReversePromptView({
         />
       </section>
     </div>
+  )
+}
+
+function CollapsiblePanel({
+  title,
+  summary,
+  icon,
+  open,
+  onOpenChange,
+  children,
+}: {
+  title: string
+  summary?: string
+  icon?: ReactNode
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  children: ReactNode
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border bg-background">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-muted"
+        onClick={() => onOpenChange(!open)}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {icon ? (
+            <span className="shrink-0 text-muted-foreground">{icon}</span>
+          ) : null}
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">{title}</span>
+            {summary ? (
+              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                {summary}
+              </span>
+            ) : null}
+          </span>
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground transition",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+      {open ? <div className="grid gap-3 border-t p-3">{children}</div> : null}
+    </section>
   )
 }
 
@@ -2298,6 +2448,49 @@ function ResultCard({
         </div>
       </div>
     </article>
+  )
+}
+
+function GenerationProgress({
+  total,
+  done,
+  success,
+  failed,
+  isRunning,
+}: {
+  total: number
+  done: number
+  success: number
+  failed: number
+  isRunning: boolean
+}) {
+  const percent = total ? Math.round((done / total) * 100) : 0
+
+  return (
+    <div className="mb-4 rounded-lg border bg-muted/40 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+        <div className="flex min-w-0 items-center gap-2 font-medium">
+          {isRunning ? (
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          ) : null}
+          <span>{isRunning ? "生成中" : "生成完成"}</span>
+        </div>
+        <span className="font-mono text-xs text-muted-foreground">
+          {done}/{total} · {percent}%
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-background">
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-500"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span>成功 {success}</span>
+        <span>失败 {failed}</span>
+        <span>等待 {Math.max(0, total - done)}</span>
+      </div>
+    </div>
   )
 }
 

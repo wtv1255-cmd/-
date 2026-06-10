@@ -163,11 +163,22 @@ function getSystemProxyEnv() {
 function prepareUserDatabase(seedDbPath) {
   const dataDir = path.join(app.getPath("userData"), "data")
   const userDbPath = path.join(dataDir, "infinite-canvas.db")
+  const legacyDbPath = path.join(
+    app.getPath("appData"),
+    "prompt-center-desktop",
+    "data",
+    "infinite-canvas.db"
+  )
 
   fs.mkdirSync(dataDir, { recursive: true })
-  if (!fs.existsSync(userDbPath) && fs.existsSync(seedDbPath)) {
-    fs.copyFileSync(seedDbPath, userDbPath)
-    logStartup(`初始化用户数据库：${userDbPath}`)
+  if (!fs.existsSync(userDbPath)) {
+    if (fs.existsSync(legacyDbPath)) {
+      fs.copyFileSync(legacyDbPath, userDbPath)
+      logStartup(`已继承旧版同步数据库：${legacyDbPath}`)
+    } else if (fs.existsSync(seedDbPath)) {
+      fs.copyFileSync(seedDbPath, userDbPath)
+      logStartup(`初始化用户数据库：${userDbPath}`)
+    }
   }
 
   return userDbPath
