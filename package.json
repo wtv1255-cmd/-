@@ -1,7 +1,7 @@
 {
-  "name": "prompt-center-shadcn",
+  "name": "ta-huo",
   "version": "0.0.1",
-  "description": "本地提示词中心和图片工作台",
+  "description": "她火本地提示词和图片工作台",
   "author": "local",
   "type": "module",
   "main": "electron/main.mjs",

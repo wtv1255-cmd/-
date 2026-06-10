@@ -154,16 +154,16 @@ export const DEFAULT_IMAGE_MODEL_API_PROFILES: Record<
 )
 
 export const IMAGE_SIZE_OPTIONS = [
-  { label: "Auto", value: "auto" },
-  { label: "1024x1024", value: "1024x1024" },
-  { label: "1536x864", value: "1536x864" },
-  { label: "864x1536", value: "864x1536" },
-  { label: "2048x2048", value: "2048x2048" },
-  { label: "2560x1440", value: "2560x1440" },
-  { label: "1440x2560", value: "1440x2560" },
-  { label: "3840x2160", value: "3840x2160" },
-  { label: "2160x3840", value: "2160x3840" },
-  { label: "2880x2880", value: "2880x2880" },
+  { label: "自动", value: "auto" },
+  { label: "1:1", value: "1:1" },
+  { label: "16:9", value: "16:9" },
+  { label: "9:16", value: "9:16" },
+  { label: "4:3", value: "4:3" },
+  { label: "3:4", value: "3:4" },
+  { label: "3:2", value: "3:2" },
+  { label: "2:3", value: "2:3" },
+  { label: "21:9", value: "21:9" },
+  { label: "9:21", value: "9:21" },
 ] as const
 
 export const IMAGE_QUALITY_OPTIONS: Array<{

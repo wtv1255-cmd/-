@@ -1,4 +1,4 @@
-# 提示词中心
+# 她火
 
 独立本地工具，用于管理真实提示词数据、把提示词发送到图片工作台，并将生成结果整理到本地卡片图库。
 
@@ -7,7 +7,7 @@
 桌面端：
 
 ```text
-dist-desktop\win-unpacked\提示词中心.exe
+dist-desktop\win-unpacked\她火.exe
 ```
 
 桌面程序会自动启动真实提示词后端和本地 Next 前端，关闭窗口时会清理它自己启动的进程。
@@ -51,6 +51,11 @@ pnpm exec next dev --turbopack --port 48218
 
 `.env.local` 不再保存 CodexProxy 地址和密钥。
 
+如果要打包给朋友并让首次启动自动带入默认 API 配置，可以把
+`desktop-default-api-settings.example.json` 复制为
+`desktop-default-api-settings.local.json` 后填写地址和 Key。这个 local
+文件不会提交到 Git，但 `pnpm run desktop:build` 会把它内置进桌面包。
+
 ## 开发准备
 
 首次拉取源码后安装依赖：
@@ -74,12 +79,12 @@ pnpm run desktop:build
 
 ## 数据说明
 
-`backend\data\infinite-canvas.db` 保留真实提示词数据，当前 `prompts` 表为 1361 条。用户、积分、素材和设置表已清空，只作为本地提示词中心的可重建种子数据包使用。
+`backend\data\infinite-canvas.db` 保留真实提示词数据，当前 `prompts` 表为 1361 条。用户、积分、素材和设置表已清空，只作为她火的可重建种子数据包使用。
 
 打包后的桌面端第一次启动时，会把内置种子数据库复制到 Electron 用户数据目录：
 
 ```text
-%APPDATA%\prompt-center-desktop\data\infinite-canvas.db
+%APPDATA%\她火\data\infinite-canvas.db
 ```
 
 后续同步源写入的是这份用户数据库。同步成功后，正常重新启动会读取同步后的结果；重新打包或升级也不会覆盖这份用户数据库。

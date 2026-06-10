@@ -2,8 +2,12 @@ import { spawn, spawnSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const backendDir = process.env.PROMPT_BACKEND_SOURCE_DIR || path.join(projectDir, "backend")
+const projectDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  ".."
+)
+const backendDir =
+  process.env.PROMPT_BACKEND_SOURCE_DIR || path.join(projectDir, "backend")
 const frontendUrl = "http://127.0.0.1:48218"
 const children = []
 let stopping = false
@@ -36,7 +40,7 @@ function killTree(pid) {
 function shutdown() {
   if (stopping) return
   stopping = true
-  console.log("\n正在关闭提示词中心...")
+  console.log("\n正在关闭她火...")
   for (const { child } of children.reverse()) {
     killTree(child.pid)
   }
@@ -55,8 +59,13 @@ process.on("exit", shutdown)
 console.log("启动真实提示词后端...")
 startProcess("提示词后端", "go", ["run", "."], backendDir)
 
-console.log("启动独立提示词中心前端...")
-startProcess("提示词中心前端", "pnpm", ["exec", "next", "dev", "--turbopack", "--port", "48218"], projectDir)
+console.log("启动她火前端...")
+startProcess(
+  "她火前端",
+  "pnpm",
+  ["exec", "next", "dev", "--turbopack", "--port", "48218"],
+  projectDir
+)
 
 setTimeout(() => {
   spawn("cmd", ["/c", "start", "", frontendUrl], {

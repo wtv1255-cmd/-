@@ -6,7 +6,11 @@ import { Check, Search, Sparkles, X } from "lucide-react"
 import { PromptVisual } from "@/components/prompt-card"
 import { Button } from "@/components/ui/button"
 import { usePromptList } from "@/hooks/use-prompt-list"
-import { getCategoryLabel, getPromptSummary, getTagLabel } from "@/lib/api/prompts"
+import {
+  getCategoryLabel,
+  getPromptSummary,
+  getTagLabel,
+} from "@/lib/api/prompts"
 import { cn } from "@/lib/utils"
 import { ALL_PROMPTS_OPTION, type Prompt } from "@/lib/types/prompt"
 
@@ -34,7 +38,11 @@ export function PromptSelectDialog({
   })
 
   const selectedPrompt = useMemo(() => {
-    return promptList.allItems.find((item) => item.id === selectedId) || promptList.items[0] || null
+    return (
+      promptList.allItems.find((item) => item.id === selectedId) ||
+      promptList.items[0] ||
+      null
+    )
   }, [promptList.allItems, promptList.items, selectedId])
 
   useEffect(() => {
@@ -50,7 +58,11 @@ export function PromptSelectDialog({
       setTags([])
       return
     }
-    setTags((current) => (current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]))
+    setTags((current) =>
+      current.includes(tag)
+        ? current.filter((item) => item !== tag)
+        : [...current, tag]
+    )
   }
 
   return (
@@ -69,9 +81,16 @@ export function PromptSelectDialog({
             <h2 id="prompt-select-title" className="text-lg font-semibold">
               选择提示词
             </h2>
-            <p className="mt-1 text-sm text-muted-foreground">选择后带到图片工作台。</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              选择后带到图片工作台。
+            </p>
           </div>
-          <Button size="icon" variant="outline" onClick={() => onOpenChange(false)} aria-label="关闭选择提示词">
+          <Button
+            size="icon"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            aria-label="关闭选择提示词"
+          >
             <X className="size-4" />
           </Button>
         </header>
@@ -79,17 +98,19 @@ export function PromptSelectDialog({
         <div className="min-h-0 overflow-auto p-5">
           <div className="mb-4 grid gap-3">
             <label className="relative max-w-2xl">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
               <input
                 value={keyword}
                 onChange={(event) => setKeyword(event.target.value)}
-                className="h-9 w-full rounded-lg border bg-muted px-9 text-sm outline-none transition focus:bg-background focus:ring-2 focus:ring-ring/20"
+                className="h-9 w-full rounded-lg border bg-muted px-9 text-sm transition outline-none focus:bg-background focus:ring-2 focus:ring-ring/20"
                 placeholder="搜索标题或提示词"
               />
             </label>
 
             <div className="grid gap-2 text-sm md:grid-cols-[56px_minmax(0,1fr)]">
-              <div className="pt-1.5 text-xs font-medium text-muted-foreground">分类</div>
+              <div className="pt-1.5 text-xs font-medium text-muted-foreground">
+                分类
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {promptList.categories.map((item) => (
                   <FilterChip
@@ -100,17 +121,24 @@ export function PromptSelectDialog({
                       setSelectedId("")
                     }}
                   >
-                    {item === ALL_PROMPTS_OPTION ? "全部分类" : getCategoryLabel(item)}
+                    {item === ALL_PROMPTS_OPTION
+                      ? "全部分类"
+                      : getCategoryLabel(item)}
                   </FilterChip>
                 ))}
               </div>
             </div>
 
             <div className="grid gap-2 text-sm md:grid-cols-[56px_minmax(0,1fr)]">
-              <div className="pt-1.5 text-xs font-medium text-muted-foreground">标签</div>
+              <div className="pt-1.5 text-xs font-medium text-muted-foreground">
+                标签
+              </div>
               <div className="flex max-h-24 flex-wrap gap-2 overflow-y-auto pr-1">
                 {promptList.tags.map((item) => {
-                  const active = item === ALL_PROMPTS_OPTION ? tags.length === 0 : tags.includes(item)
+                  const active =
+                    item === ALL_PROMPTS_OPTION
+                      ? tags.length === 0
+                      : tags.includes(item)
                   return (
                     <FilterChip
                       key={item}
@@ -120,7 +148,9 @@ export function PromptSelectDialog({
                         setSelectedId("")
                       }}
                     >
-                      {item === ALL_PROMPTS_OPTION ? "全部标签" : getTagLabel(item)}
+                      {item === ALL_PROMPTS_OPTION
+                        ? "全部标签"
+                        : getTagLabel(item)}
                     </FilterChip>
                   )
                 })}
@@ -131,7 +161,9 @@ export function PromptSelectDialog({
           <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
             <aside className="min-h-96 overflow-hidden rounded-lg border">
               <div className="border-b bg-muted px-3 py-2 text-xs text-muted-foreground">
-                {promptList.isLoading ? "加载中" : `${promptList.total} 条结果，显示前 ${promptList.items.length} 条`}
+                {promptList.isLoading
+                  ? "加载中"
+                  : `${promptList.total} 条结果，显示前 ${promptList.items.length} 条`}
               </div>
               <div className="max-h-[520px] overflow-auto p-2">
                 {promptList.error ? (
@@ -139,8 +171,12 @@ export function PromptSelectDialog({
                     {promptList.error.message}
                   </div>
                 ) : null}
-                {!promptList.isLoading && !promptList.error && promptList.items.length === 0 ? (
-                  <div className="grid min-h-72 place-items-center text-center text-sm text-muted-foreground">没有匹配结果</div>
+                {!promptList.isLoading &&
+                !promptList.error &&
+                promptList.items.length === 0 ? (
+                  <div className="grid min-h-72 place-items-center text-center text-sm text-muted-foreground">
+                    没有匹配结果
+                  </div>
                 ) : null}
                 <div className="grid gap-2">
                   {promptList.items.map((item) => (
@@ -149,19 +185,29 @@ export function PromptSelectDialog({
                       type="button"
                       className={cn(
                         "grid grid-cols-[44px_minmax(0,1fr)_20px] items-center gap-3 rounded-lg border bg-background p-2 text-left text-sm hover:bg-muted",
-                        selectedPrompt?.id === item.id && "border-foreground bg-muted",
+                        selectedPrompt?.id === item.id &&
+                          "border-primary bg-primary/5"
                       )}
                       onClick={() => setSelectedId(item.id)}
                     >
-                      <PromptVisual prompt={item} className="h-11 rounded-md border" label={null} />
+                      <PromptVisual
+                        prompt={item}
+                        className="h-11 rounded-md border"
+                        label={null}
+                      />
                       <span className="min-w-0">
-                        <span className="block truncate font-medium">{item.title}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{getCategoryLabel(item.category)}</span>
+                        <span className="block truncate font-medium">
+                          {item.title}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {getCategoryLabel(item.category)}
+                        </span>
                       </span>
                       <span
                         className={cn(
                           "grid size-5 place-items-center rounded-full border text-transparent",
-                          selectedPrompt?.id === item.id && "border-foreground bg-foreground text-background",
+                          selectedPrompt?.id === item.id &&
+                            "border-primary bg-primary text-primary-foreground"
                         )}
                       >
                         <Check className="size-3" />
@@ -175,10 +221,18 @@ export function PromptSelectDialog({
             <section className="min-h-96 rounded-lg border bg-muted p-3">
               {selectedPrompt ? (
                 <div className="grid gap-3">
-                  <PromptVisual prompt={selectedPrompt} className="h-52 rounded-lg border" label={getCategoryLabel(selectedPrompt.category)} />
+                  <PromptVisual
+                    prompt={selectedPrompt}
+                    className="h-52 rounded-lg border"
+                    label={getCategoryLabel(selectedPrompt.category)}
+                  />
                   <div>
-                    <h3 className="text-base font-semibold">{selectedPrompt.title}</h3>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{getPromptSummary(selectedPrompt, 180)}</p>
+                    <h3 className="text-base font-semibold">
+                      {selectedPrompt.title}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                      {getPromptSummary(selectedPrompt, 180)}
+                    </p>
                   </div>
                   <textarea
                     readOnly
@@ -187,14 +241,18 @@ export function PromptSelectDialog({
                   />
                 </div>
               ) : (
-                <div className="grid min-h-96 place-items-center text-sm text-muted-foreground">未选择提示词</div>
+                <div className="grid min-h-96 place-items-center text-sm text-muted-foreground">
+                  未选择提示词
+                </div>
               )}
             </section>
           </div>
         </div>
 
         <footer className="flex items-center justify-between gap-3 border-t bg-background px-5 py-3 text-sm text-muted-foreground">
-          <span className="truncate">{selectedPrompt ? `已选择：${selectedPrompt.title}` : "未选择"}</span>
+          <span className="truncate">
+            {selectedPrompt ? `已选择：${selectedPrompt.title}` : "未选择"}
+          </span>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               取消
@@ -230,7 +288,9 @@ function FilterChip({
       type="button"
       className={cn(
         "h-7 shrink-0 rounded-full border px-3 text-xs transition",
-        active ? "border-foreground bg-foreground text-background" : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+        active
+          ? "border-primary bg-primary text-primary-foreground shadow-sm"
+          : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
       )}
       onClick={onClick}
     >

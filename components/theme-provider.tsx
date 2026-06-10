@@ -7,6 +7,7 @@ declare global {
   interface Window {
     promptCenterDesktop?: {
       setTheme: (theme: "light" | "dark") => void
+      readDefaultApiSettings?: () => Promise<unknown>
     }
   }
 }

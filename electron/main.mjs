@@ -28,19 +28,39 @@ const bundledBackendExe = path.join(
 )
 const windowIcon = path.join(projectDir, "desktop-assets", "icon.ico")
 const preloadPath = path.join(projectDir, "electron", "preload.cjs")
+const defaultApiSettingsPath = path.join(
+  projectDir,
+  "desktop-default-api-settings.json"
+)
 const childProcesses = []
 
 let mainWindow = null
 
+app.setName("她火")
 nativeTheme.themeSource = "dark"
 
 function applyWindowTheme(theme) {
   const resolvedTheme = theme === "light" ? "light" : "dark"
   nativeTheme.themeSource = resolvedTheme
+  mainWindow?.setBackgroundColor(
+    resolvedTheme === "light" ? "#ffffff" : "#0a0a0a"
+  )
 }
 
 ipcMain.on("prompt-center:set-theme", (_event, theme) => {
   applyWindowTheme(theme)
+})
+
+ipcMain.handle("ta-huo:read-default-api-settings", () => {
+  try {
+    if (!fs.existsSync(defaultApiSettingsPath)) return null
+    return JSON.parse(fs.readFileSync(defaultApiSettingsPath, "utf8"))
+  } catch (error) {
+    logStartup(
+      `读取默认 API 配置失败：${error instanceof Error ? error.message : String(error)}`
+    )
+    return null
+  }
 })
 
 function logStartup(message) {
@@ -96,7 +116,10 @@ function parseProxyServer(value) {
       .split(";")
       .map((item) => item.split("="))
       .filter(([key, proxy]) => key && proxy)
-      .map(([key, proxy]) => [key.trim().toLowerCase(), normalizeProxyValue(proxy)])
+      .map(([key, proxy]) => [
+        key.trim().toLowerCase(),
+        normalizeProxyValue(proxy),
+      ])
   )
   return {
     httpProxy: entries.http || entries.https || entries.socks || "",
@@ -117,7 +140,9 @@ function getSystemProxyEnv() {
   const proxyEnabled = readRegistryValue("ProxyEnable")
   if (proxyEnabled !== "0x1" && proxyEnabled !== "1") return {}
 
-  const { httpProxy, httpsProxy } = parseProxyServer(readRegistryValue("ProxyServer"))
+  const { httpProxy, httpsProxy } = parseProxyServer(
+    readRegistryValue("ProxyServer")
+  )
   const proxyEnv = {}
   if (httpProxy) {
     proxyEnv.HTTP_PROXY = httpProxy
@@ -259,7 +284,7 @@ async function startFrontend() {
 
   if (isDev) {
     startChild(
-      "提示词中心前端",
+      "她火前端",
       "pnpm",
       ["exec", "next", "dev", "--turbopack", "--port", String(FRONTEND_PORT)],
       projectDir,
@@ -288,7 +313,7 @@ function createWindow() {
     minHeight: 720,
     backgroundColor: "#0a0a0a",
     icon: fs.existsSync(windowIcon) ? windowIcon : undefined,
-    title: "提示词中心",
+    title: "她火",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -335,7 +360,7 @@ app
       `启动失败：${error instanceof Error ? error.stack || error.message : String(error)}`
     )
     dialog.showErrorBox(
-      "提示词中心启动失败",
+      "她火启动失败",
       error instanceof Error ? error.message : String(error)
     )
     stopChildren()

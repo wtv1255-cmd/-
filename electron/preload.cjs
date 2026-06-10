@@ -4,4 +4,7 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   setTheme(theme) {
     ipcRenderer.send("prompt-center:set-theme", theme)
   },
+  readDefaultApiSettings() {
+    return ipcRenderer.invoke("ta-huo:read-default-api-settings")
+  },
 })

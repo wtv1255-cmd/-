@@ -126,7 +126,7 @@ export function PromptDetailDialog({
                     className={cn(
                       "h-7 rounded-md px-3 text-sm transition",
                       activeTab === id
-                        ? "bg-background text-foreground shadow-sm"
+                        ? "bg-primary text-primary-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     )}
                     onClick={() => setActiveTab(id)}
@@ -156,7 +156,9 @@ export function PromptDetailDialog({
                       />
                       {previewFailed && originalPreviewUrl ? (
                         <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted px-3 py-2 text-sm text-muted-foreground">
-                          <span>图片预览加载失败，可以重试或等待本地缓存刷新。</span>
+                          <span>
+                            图片预览加载失败，可以重试或等待本地缓存刷新。
+                          </span>
                           <Button
                             type="button"
                             size="sm"
@@ -291,7 +293,10 @@ export function PromptDetailDialog({
             alt={prompt.title}
             referrerPolicy="no-referrer"
             onError={() => {
-              if (!useOriginalPreviewUrl && originalPreviewUrl !== proxiedPreviewUrl) {
+              if (
+                !useOriginalPreviewUrl &&
+                originalPreviewUrl !== proxiedPreviewUrl
+              ) {
                 setUseOriginalPreviewUrl(true)
                 return
               }

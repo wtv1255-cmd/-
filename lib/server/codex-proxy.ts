@@ -31,6 +31,17 @@ const DEFAULT_521_IMAGE_MODEL = "gpt-image-2-2K"
 const VIDEO_TASK_POLL_INTERVAL_MS = 6000
 const VIDEO_TASK_MAX_POLLS = 120
 const RETRYABLE_HTTP_STATUS = new Set([429, 500, 502, 503, 504])
+const DIRECT_521_ASPECT_RATIOS = new Set([
+  "1:1",
+  "3:2",
+  "2:3",
+  "4:3",
+  "3:4",
+  "16:9",
+  "9:16",
+  "21:9",
+  "9:21",
+])
 
 function normalizeBaseUrl(value: unknown) {
   const baseUrl =
@@ -117,7 +128,7 @@ export function buildImageJsonPayload(input: ImagePayload) {
   const payload: Record<string, unknown> = {
     model: resolve521ImageModel(model),
     prompt,
-    aspect_ratio: sizeTo521AspectRatio(input.size),
+    aspect_ratio: resolve521AspectRatio(input.size, prompt),
   }
 
   if (keepText(input.negative_prompt))
@@ -147,7 +158,7 @@ export function build521ImagePayload({
   const payload: Record<string, unknown> = {
     model: resolve521ImageModel(model),
     prompt: prompt.trim(),
-    aspect_ratio: sizeTo521AspectRatio(size),
+    aspect_ratio: resolve521AspectRatio(size, prompt),
   }
 
   if (imageUrls?.length) payload.image_urls = imageUrls
@@ -519,18 +530,7 @@ function sizeTo521AspectRatio(value: unknown) {
   const size = typeof value === "string" ? value.trim().toLowerCase() : ""
   if (!size || size === "auto") return "auto"
 
-  const directRatios = new Set([
-    "1:1",
-    "3:2",
-    "2:3",
-    "4:3",
-    "3:4",
-    "16:9",
-    "9:16",
-    "21:9",
-    "9:21",
-  ])
-  if (directRatios.has(size)) return size
+  if (DIRECT_521_ASPECT_RATIOS.has(size)) return size
 
   const match = /^(\d+)\s*x\s*(\d+)$/.exec(size)
   if (!match) return "auto"
@@ -540,9 +540,33 @@ function sizeTo521AspectRatio(value: unknown) {
 
   const divisor = gcd(width, height)
   const ratio = `${width / divisor}:${height / divisor}`
-  if (directRatios.has(ratio)) return ratio
+  if (DIRECT_521_ASPECT_RATIOS.has(ratio)) return ratio
 
   return nearest521AspectRatio(width / height)
+}
+
+function resolve521AspectRatio(size: unknown, prompt: unknown) {
+  const selectedRatio = sizeTo521AspectRatio(size)
+  if (selectedRatio !== "auto") return selectedRatio
+  return detect521AspectRatioFromPrompt(prompt) || "auto"
+}
+
+function detect521AspectRatioFromPrompt(value: unknown) {
+  const text = typeof value === "string" ? value : ""
+  const matches = text.matchAll(
+    /(?:比例|画幅|尺寸|aspect\s*ratio|--ar|ar)?\s*(\d{1,2})\s*[:：]\s*(\d{1,2})/gi
+  )
+
+  for (const match of matches) {
+    const width = Number(match[1])
+    const height = Number(match[2])
+    if (!width || !height) continue
+    const ratio = `${width}:${height}`
+    if (DIRECT_521_ASPECT_RATIOS.has(ratio)) return ratio
+    return nearest521AspectRatio(width / height)
+  }
+
+  return ""
 }
 
 function nearest521AspectRatio(value: number) {

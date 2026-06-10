@@ -14,6 +14,14 @@ const stagingDir = path.join(projectDir, ".desktop-app")
 const backendSourceDir =
   process.env.PROMPT_BACKEND_SOURCE_DIR || path.join(projectDir, "backend")
 const backendOutputDir = path.join(stagingDir, "desktop-backend")
+const defaultApiSettingsTarget = path.join(
+  stagingDir,
+  "desktop-default-api-settings.json"
+)
+const defaultApiSettingsSources = [
+  path.join(projectDir, "desktop-default-api-settings.local.json"),
+  path.join(projectDir, "desktop-default-api-settings.json"),
+]
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -78,6 +86,14 @@ function prepareBackend() {
   )
 }
 
+function prepareDefaultApiSettings() {
+  const source = defaultApiSettingsSources.find((item) => fs.existsSync(item))
+  if (!source) return
+
+  fs.copyFileSync(source, defaultApiSettingsTarget)
+  console.log(`已内置默认 API 配置：${path.basename(source)}`)
+}
+
 run("pnpm", ["exec", "next", "build"])
 
 fs.rmSync(stagingDir, { recursive: true, force: true })
@@ -99,22 +115,23 @@ copyDir(
   path.join(standaloneServerDir, "public")
 )
 prepareBackend()
+prepareDefaultApiSettings()
 
 fs.writeFileSync(
   path.join(stagingDir, "package.json"),
   `${JSON.stringify(
     {
-      name: "prompt-center-desktop",
+      name: "ta-huo-desktop",
       version: "0.0.1",
-      description: "本地提示词中心和图片工作台",
+      description: "她火本地提示词和图片工作台",
       author: "local",
       private: true,
       type: "module",
       main: "electron/main.mjs",
       dependencies: sourcePackage.dependencies || {},
       build: {
-        appId: "local.prompt-center",
-        productName: "提示词中心",
+        appId: "local.ta-huo",
+        productName: "她火",
         electronVersion: "39.8.10",
         icon: "desktop-assets/icon.ico",
         win: {

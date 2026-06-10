@@ -13,8 +13,8 @@ const fontMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "提示词中心",
-  description: "提示词管理和图片样例浏览平台",
+  title: "她火",
+  description: "她火提示词和图片工作台",
 }
 
 export default function RootLayout({
@@ -26,7 +26,12 @@ export default function RootLayout({
     <html
       lang="zh-CN"
       suppressHydrationWarning
-      className={cn("antialiased", fontMono.variable, "font-sans", inter.variable)}
+      className={cn(
+        "antialiased",
+        fontMono.variable,
+        "font-sans",
+        inter.variable
+      )}
     >
       <body>
         <ThemeProvider>{children}</ThemeProvider>

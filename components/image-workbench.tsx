@@ -229,6 +229,72 @@ function normalizeTextApiBaseUrl(value: unknown, legacyApiBaseUrl: unknown) {
   return DEFAULT_IMAGE_SETTINGS.textApiBaseUrl
 }
 
+function normalizeImageSettingCount(value: unknown) {
+  const count = Number(value)
+  if (!Number.isFinite(count)) return DEFAULT_IMAGE_SETTINGS.count
+  return Math.max(1, Math.min(10, Math.floor(Math.abs(count))))
+}
+
+function normalizeImageSettingSize(value: unknown) {
+  const size = typeof value === "string" ? value.trim() : ""
+  if (!size) return DEFAULT_IMAGE_SETTINGS.size
+
+  const legacySizeMap: Record<string, string> = {
+    "1024x1024": "1:1",
+    "2048x2048": "1:1",
+    "2880x2880": "1:1",
+    "1536x864": "16:9",
+    "2560x1440": "16:9",
+    "3840x2160": "16:9",
+    "864x1536": "9:16",
+    "1440x2560": "9:16",
+    "2160x3840": "9:16",
+  }
+
+  return legacySizeMap[size.toLowerCase()] || size
+}
+
+function hydrateImageSettings(value: unknown): ImageSettings {
+  const parsed =
+    value && typeof value === "object" ? (value as Partial<ImageSettings>) : {}
+  const model = normalizeImageModel(parsed.model)
+  const legacyApiBaseUrl = cleanApiBaseUrl(parsed.apiBaseUrl)
+  const legacyApiKey =
+    typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : ""
+  const imageApiKey = LEGACY_IMAGE_API_BASE_URLS.has(legacyApiBaseUrl)
+    ? DEFAULT_IMAGE_SETTINGS.apiKey
+    : legacyApiKey
+  const textApiKey =
+    typeof parsed.textApiKey === "string"
+      ? parsed.textApiKey.trim()
+      : legacyApiBaseUrl === DEFAULT_TEXT_API_BASE
+        ? legacyApiKey
+        : DEFAULT_IMAGE_SETTINGS.textApiKey
+  const modelApiProfiles = hydrateModelApiProfiles(
+    parsed.modelApiProfiles,
+    model,
+    parsed.apiBaseUrl,
+    imageApiKey
+  )
+  const activeImageProfile = readImageApiProfile(modelApiProfiles, model)
+
+  return {
+    ...DEFAULT_IMAGE_SETTINGS,
+    ...parsed,
+    model,
+    apiBaseUrl: activeImageProfile.apiBaseUrl,
+    apiKey: activeImageProfile.apiKey,
+    modelApiProfiles,
+    size: normalizeImageSettingSize(parsed.size),
+    textApiBaseUrl: normalizeTextApiBaseUrl(
+      parsed.textApiBaseUrl,
+      parsed.apiBaseUrl
+    ),
+    textApiKey,
+    count: normalizeImageSettingCount(parsed.count),
+  }
+}
+
 type ImagePreview = {
   url: string
   title: string
@@ -247,6 +313,7 @@ export function ImageWorkbench() {
   const [settings, setSettings] = useState<ImageSettings>(
     DEFAULT_IMAGE_SETTINGS
   )
+  const [settingsHydrated, setSettingsHydrated] = useState(false)
   const [mode, setMode] = useState<ImageMode>("text")
   const [prompt, setPrompt] = useState("")
   const [style, setStyle] = useState("")
@@ -285,6 +352,9 @@ export function ImageWorkbench() {
   const selectedModelLabel =
     IMAGE_MODELS.find((item) => item.value === selectedModel)?.label ||
     selectedModel
+  const selectedSizeLabel =
+    IMAGE_SIZE_OPTIONS.find((item) => item.value === settings.size)?.label ||
+    settings.size
   const imageApiConfigured = Boolean(
     settings.apiBaseUrl.trim() && settings.apiKey.trim()
   )
@@ -310,51 +380,33 @@ export function ImageWorkbench() {
   }, [refreshLibrary])
 
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
-      if (!saved) return
-      const parsed = JSON.parse(saved) as Partial<ImageSettings>
-      const model = normalizeImageModel(parsed.model)
-      const legacyApiBaseUrl = cleanApiBaseUrl(parsed.apiBaseUrl)
-      const legacyApiKey =
-        typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : ""
-      const imageApiKey = LEGACY_IMAGE_API_BASE_URLS.has(legacyApiBaseUrl)
-        ? DEFAULT_IMAGE_SETTINGS.apiKey
-        : legacyApiKey
-      const textApiKey =
-        typeof parsed.textApiKey === "string"
-          ? parsed.textApiKey.trim()
-          : legacyApiBaseUrl === DEFAULT_TEXT_API_BASE
-            ? legacyApiKey
-            : DEFAULT_IMAGE_SETTINGS.textApiKey
-      const modelApiProfiles = hydrateModelApiProfiles(
-        parsed.modelApiProfiles,
-        model,
-        parsed.apiBaseUrl,
-        imageApiKey
-      )
-      const activeImageProfile = readImageApiProfile(modelApiProfiles, model)
-      setSettings({
-        ...DEFAULT_IMAGE_SETTINGS,
-        ...parsed,
-        model,
-        apiBaseUrl: activeImageProfile.apiBaseUrl,
-        apiKey: activeImageProfile.apiKey,
-        modelApiProfiles,
-        textApiBaseUrl: normalizeTextApiBaseUrl(
-          parsed.textApiBaseUrl,
-          parsed.apiBaseUrl
-        ),
-        textApiKey,
-      })
-    } catch {
-      setSettings(DEFAULT_IMAGE_SETTINGS)
+    let alive = true
+
+    async function hydrateSettings() {
+      try {
+        const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
+        const rawSettings = saved
+          ? JSON.parse(saved)
+          : await window.promptCenterDesktop?.readDefaultApiSettings?.()
+        if (!alive) return
+        setSettings(hydrateImageSettings(rawSettings))
+      } catch {
+        if (alive) setSettings(hydrateImageSettings(null))
+      } finally {
+        if (alive) setSettingsHydrated(true)
+      }
+    }
+
+    void hydrateSettings()
+    return () => {
+      alive = false
     }
   }, [])
 
   useEffect(() => {
+    if (!settingsHydrated) return
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
-  }, [settings])
+  }, [settings, settingsHydrated])
 
   useEffect(() => {
     router.prefetch("/")
@@ -771,7 +823,7 @@ export function ImageWorkbench() {
       return {
         ...current,
         model,
-        size: cardSettings.size,
+        size: normalizeImageSettingSize(cardSettings.size),
         quality: cardSettings.quality,
         outputFormat: cardSettings.outputFormat,
         background: cardSettings.background,
@@ -1042,7 +1094,7 @@ export function ImageWorkbench() {
                       创建生图
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {selectedModelLabel} · {settings.size} ·{" "}
+                      {selectedModelLabel} · {selectedSizeLabel} ·{" "}
                       {settings.quality}
                     </p>
                   </div>
@@ -1173,7 +1225,7 @@ export function ImageWorkbench() {
                           className={cn(
                             "min-h-9 rounded-md border px-3 text-left text-xs transition",
                             style === item.value
-                              ? "border-foreground bg-foreground text-background"
+                              ? "border-primary bg-primary text-primary-foreground shadow-sm"
                               : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
                           )}
                           onClick={() => setStyle(item.value)}
@@ -1226,17 +1278,16 @@ export function ImageWorkbench() {
                 </div>
               </section>
 
-              <section className="min-w-0 rounded-lg border bg-zinc-950 p-4 text-zinc-50">
+              <section className="min-w-0 rounded-lg border bg-background p-4 text-foreground">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold">生成结果</h2>
-                    <p className="mt-1 text-sm text-zinc-400">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       黑色背景用于完整查看透明图和浅色图。
                     </p>
                   </div>
                   <Button
                     variant="outline"
-                    className="border-zinc-700 bg-zinc-900 text-zinc-50 hover:bg-zinc-800"
                     disabled={
                       !results.some((item) => item.status === "success")
                     }
@@ -1451,7 +1502,7 @@ function ReversePromptView({
                 className={cn(
                   "h-8 rounded-md px-3 text-sm transition",
                   mode === item.value
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "bg-primary text-primary-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
                 )}
                 onClick={() => onModeChange(item.value)}
@@ -1521,7 +1572,7 @@ function ReversePromptView({
                 className={cn(
                   "h-8 rounded-md border px-2 text-xs transition",
                   model === item.value
-                    ? "border-foreground bg-foreground text-background"
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm"
                     : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
                 onClick={() => onModelChange(item.value)}
@@ -1682,7 +1733,7 @@ function SettingsPanel({
         onChange={(value) => onSettingChange("model", value)}
       />
       <SelectField
-        label="尺寸"
+        label="比例"
         value={settings.size}
         options={IMAGE_SIZE_OPTIONS}
         onChange={(value) => onSettingChange("size", value)}
@@ -1722,7 +1773,7 @@ function SettingsPanel({
               className={cn(
                 "h-8 rounded-md border text-xs transition",
                 textModel === item.value
-                  ? "border-foreground bg-foreground text-background"
+                  ? "border-primary bg-primary text-primary-foreground shadow-sm"
                   : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
               )}
               onClick={() => onTextModelChange(item.value)}
@@ -1743,7 +1794,7 @@ function SettingsPanel({
               className={cn(
                 "h-8 rounded-md border text-sm",
                 settings.count === value
-                  ? "border-foreground bg-foreground text-background"
+                  ? "border-primary bg-primary text-primary-foreground shadow-sm"
                   : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
               )}
               onClick={() => onSettingChange("count", value)}
@@ -1894,7 +1945,7 @@ function ApiSettingsDialog({
                       className={cn(
                         "flex min-h-10 items-center justify-between gap-2 rounded-md border px-3 text-left text-xs transition",
                         active
-                          ? "border-foreground bg-foreground text-background"
+                          ? "border-primary bg-primary text-primary-foreground shadow-sm"
                           : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
                       )}
                       onClick={() => setDraftModel(item.value)}
@@ -2197,7 +2248,7 @@ function ResultCard({
     : image.mimeType.split("/")[1] || "png"
 
   return (
-    <article className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-900">
+    <article className="overflow-hidden rounded-md border bg-background">
       <div
         className="grid aspect-square cursor-zoom-in place-items-center bg-black"
         onClick={() => onPreview(image)}
@@ -2209,8 +2260,8 @@ function ResultCard({
           className="max-h-full max-w-full object-contain"
         />
       </div>
-      <div className="grid gap-2 border-t border-zinc-800 p-2.5">
-        <div className="flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-zinc-400">
+      <div className="grid gap-2 border-t p-2.5">
+        <div className="flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
           <span>
             {image.width}x{image.height}
           </span>
@@ -2221,7 +2272,6 @@ function ResultCard({
           <Button
             variant="outline"
             size="sm"
-            className="border-zinc-700 bg-zinc-950 text-zinc-50 hover:bg-zinc-800"
             onClick={() => void onSave(image)}
           >
             <FolderOpen className="size-3.5" />
@@ -2230,7 +2280,6 @@ function ResultCard({
           <Button
             variant="outline"
             size="sm"
-            className="border-zinc-700 bg-zinc-950 text-zinc-50 hover:bg-zinc-800"
             onClick={() => onUseReference(image)}
           >
             <ImagePlus className="size-3.5" />
@@ -2239,7 +2288,6 @@ function ResultCard({
           <Button
             variant="outline"
             size="sm"
-            className="border-zinc-700 bg-zinc-950 text-zinc-50 hover:bg-zinc-800"
             onClick={() =>
               downloadBlob(image.blob, `generated-${index + 1}.${extension}`)
             }
@@ -2354,7 +2402,7 @@ function GalleryView({
                 className={cn(
                   "h-8 rounded-md px-2 text-sm transition",
                   filter === id
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "bg-primary text-primary-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
                 )}
                 onClick={() => setFilter(id)}
@@ -2640,7 +2688,7 @@ function Segmented<T extends string>({
           className={cn(
             "h-7 rounded-md px-3 text-sm transition",
             value === id
-              ? "bg-background text-foreground shadow-sm"
+              ? "bg-primary text-primary-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           )}
           onClick={() => onChange(id)}

@@ -254,7 +254,7 @@ export default function Page() {
           <div className="grid size-8 place-items-center rounded-lg border bg-background">
             <Database className="size-4" />
           </div>
-          <span className="text-sm font-semibold">提示词中心</span>
+          <span className="text-sm font-semibold">她火</span>
         </div>
 
         <label className="relative max-w-2xl flex-1">
@@ -462,7 +462,7 @@ export default function Page() {
                     className={cn(
                       "h-7 shrink-0 rounded-full border px-3 text-xs transition",
                       active
-                        ? "border-foreground bg-foreground text-background"
+                        ? "border-primary bg-primary text-primary-foreground shadow-sm"
                         : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                     onClick={() => toggleTag(tag)}
@@ -688,7 +688,7 @@ function Segmented<T extends string>({
           className={cn(
             "h-7 min-w-16 rounded-md px-3 text-sm transition",
             value === id
-              ? "bg-background text-foreground shadow-sm"
+              ? "bg-primary text-primary-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           )}
           onClick={() => onChange(id)}
@@ -786,7 +786,7 @@ function Pagination({
             className={cn(
               "grid size-8 place-items-center rounded-md border text-sm",
               item === page
-                ? "border-foreground bg-foreground text-background"
+                ? "border-primary bg-primary text-primary-foreground shadow-sm"
                 : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
             )}
             onClick={() => onChange(item)}
