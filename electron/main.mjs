@@ -12,8 +12,10 @@ import net from "node:net"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-const FRONTEND_PORT = 48218
-const BACKEND_PORT = 8080
+const PREFERRED_FRONTEND_PORT = 48218
+const FRONTEND_PORT_CANDIDATES = [48218, 48219, 48220, 48221, 48222]
+const PREFERRED_BACKEND_PORT = 8080
+const BACKEND_PORT_CANDIDATES = [8080, 18080, 18081, 18082, 18083]
 const HOST = "127.0.0.1"
 const isDev = !app.isPackaged
 const projectDir = isDev
@@ -35,6 +37,8 @@ const defaultApiSettingsPath = path.join(
 const childProcesses = []
 
 let mainWindow = null
+let frontendPort = PREFERRED_FRONTEND_PORT
+let backendPort = PREFERRED_BACKEND_PORT
 
 app.setName("她火")
 nativeTheme.themeSource = "dark"
@@ -199,6 +203,78 @@ function isPortOpen(port) {
   })
 }
 
+async function isPromptBackendReady(port) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 1500)
+
+  try {
+    const response = await fetch(`http://${HOST}:${port}/api/health`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+    const text = await response.text()
+    return response.ok && text.trim() === "ok"
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function isTaHuoFrontendReady(port) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 1500)
+
+  try {
+    const response = await fetch(`http://${HOST}:${port}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+    const text = await response.text()
+    return response.ok && text.includes("<title>她火</title>")
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function findBackendPort() {
+  for (const port of BACKEND_PORT_CANDIDATES) {
+    if (await isPromptBackendReady(port)) {
+      return { port, reuse: true }
+    }
+    if (!(await isPortOpen(port))) {
+      return { port, reuse: false }
+    }
+    logStartup(`端口 ${port} 已被非她火服务占用，尝试备用端口`)
+  }
+
+  for (let port = 18084; port < 18120; port += 1) {
+    if (!(await isPortOpen(port))) return { port, reuse: false }
+  }
+
+  throw new Error("没有可用的提示词后端端口")
+}
+
+async function findFrontendPort() {
+  for (const port of FRONTEND_PORT_CANDIDATES) {
+    if (await isTaHuoFrontendReady(port)) {
+      return { port, reuse: true }
+    }
+    if (!(await isPortOpen(port))) {
+      return { port, reuse: false }
+    }
+    logStartup(`端口 ${port} 已被非她火前端占用，尝试备用端口`)
+  }
+
+  for (let port = 48223; port < 48260; port += 1) {
+    if (!(await isPortOpen(port))) return { port, reuse: false }
+  }
+
+  throw new Error("没有可用的她火前端端口")
+}
+
 async function waitForPort(port, timeoutMs = 45000) {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
@@ -206,6 +282,15 @@ async function waitForPort(port, timeoutMs = 45000) {
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   throw new Error(`本地端口 ${port} 启动超时`)
+}
+
+async function waitForPromptBackend(port, timeoutMs = 45000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await isPromptBackendReady(port)) return
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  throw new Error(`提示词后端 ${port} 启动超时`)
 }
 
 function startChild(label, command, args, cwd, env = {}) {
@@ -251,7 +336,12 @@ function findStandaloneServer(standaloneDir) {
 
 async function startBackend() {
   logStartup(`准备启动后端：appPath=${projectDir}，packaged=${app.isPackaged}`)
-  if (await isPortOpen(BACKEND_PORT)) return
+  const selectedBackend = await findBackendPort()
+  backendPort = selectedBackend.port
+  if (selectedBackend.reuse) {
+    logStartup(`复用已启动的提示词后端：http://${HOST}:${backendPort}`)
+    return
+  }
 
   if (fs.existsSync(bundledBackendExe)) {
     const userDbPath = prepareUserDatabase(
@@ -260,12 +350,12 @@ async function startBackend() {
     logStartup(`使用内置后端：${bundledBackendExe}`)
     startChild("提示词后端", bundledBackendExe, [], bundledBackendDir, {
       ...getSystemProxyEnv(),
-      PORT: String(BACKEND_PORT),
+      PORT: String(backendPort),
       STORAGE_DRIVER: "sqlite",
       DATABASE_DSN: userDbPath,
       IMAGE_CACHE_DIR: path.join(app.getPath("userData"), "image-cache"),
     })
-    await waitForPort(BACKEND_PORT, 45000)
+    await waitForPromptBackend(backendPort, 45000)
     return
   }
 
@@ -278,26 +368,32 @@ async function startBackend() {
   logStartup(`使用开发后端：${FALLBACK_BACKEND_DIR}`)
   startChild("提示词后端", "go", ["run", "."], FALLBACK_BACKEND_DIR, {
     ...getSystemProxyEnv(),
+    PORT: String(backendPort),
   })
-  await waitForPort(BACKEND_PORT, 45000)
+  await waitForPromptBackend(backendPort, 45000)
 }
 
 async function startFrontend() {
   logStartup("准备启动前端")
-  if (await isPortOpen(FRONTEND_PORT)) return
+  const selectedFrontend = await findFrontendPort()
+  frontendPort = selectedFrontend.port
+  if (selectedFrontend.reuse) {
+    logStartup(`复用已启动的她火前端：http://${HOST}:${frontendPort}`)
+    return
+  }
 
   const env = {
     ...getSystemProxyEnv(),
-    PORT: String(FRONTEND_PORT),
+    PORT: String(frontendPort),
     HOSTNAME: HOST,
-    NEXT_PUBLIC_PROMPT_API_BASE: `http://${HOST}:${BACKEND_PORT}`,
+    NEXT_PUBLIC_PROMPT_API_BASE: `http://${HOST}:${backendPort}`,
   }
 
   if (isDev) {
     startChild(
       "她火前端",
       "pnpm",
-      ["exec", "next", "dev", "--turbopack", "--port", String(FRONTEND_PORT)],
+      ["exec", "next", "dev", "--turbopack", "--port", String(frontendPort)],
       projectDir,
       env
     )
@@ -312,7 +408,7 @@ async function startFrontend() {
     await import(pathToFileURL(serverPath).href)
   }
 
-  await waitForPort(FRONTEND_PORT, 45000)
+  await waitForPort(frontendPort, 45000)
 }
 
 function createWindow() {
@@ -334,7 +430,7 @@ function createWindow() {
   })
 
   mainWindow.removeMenu()
-  mainWindow.loadURL(`http://${HOST}:${FRONTEND_PORT}`)
+  mainWindow.loadURL(`http://${HOST}:${frontendPort}`)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: "deny" }
