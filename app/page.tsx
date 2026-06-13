@@ -1,12 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   AlertCircle,
   ChevronDown,
   Check,
-  Copy,
   Database,
   ImagePlus,
   Loader2,
@@ -56,6 +55,85 @@ const viewOptions: Array<[PromptViewMode, string]> = [
   ["review", "待整理"],
 ]
 
+const PROMPT_CENTER_VIEW_STATE_KEY = "ta-huo:prompt-center:view-state"
+
+type PromptCenterViewState = {
+  keyword: string
+  category: string
+  selectedTags: string[]
+  source: PromptSource
+  view: PromptViewMode
+  page: number
+  scrollTop: number
+  sourceCategoriesOpen: boolean
+  yanaiCategoriesOpen: boolean
+}
+
+function isPromptSource(value: unknown): value is PromptSource {
+  return value === "all" || value === "local" || value === "remote"
+}
+
+function isPromptViewMode(value: unknown): value is PromptViewMode {
+  return value === "grid" || value === "compact" || value === "review"
+}
+
+function readPromptCenterViewState(): PromptCenterViewState | null {
+  if (typeof window === "undefined") return null
+
+  try {
+    const raw = window.sessionStorage.getItem(PROMPT_CENTER_VIEW_STATE_KEY)
+    if (!raw) return null
+
+    const payload = JSON.parse(raw) as Partial<PromptCenterViewState>
+    return {
+      keyword: typeof payload.keyword === "string" ? payload.keyword : "",
+      category:
+        typeof payload.category === "string"
+          ? payload.category
+          : ALL_PROMPTS_OPTION,
+      selectedTags: Array.isArray(payload.selectedTags)
+        ? payload.selectedTags.filter(
+            (item): item is string => typeof item === "string"
+          )
+        : [],
+      source: isPromptSource(payload.source) ? payload.source : "all",
+      view: isPromptViewMode(payload.view) ? payload.view : "grid",
+      page:
+        typeof payload.page === "number" && Number.isFinite(payload.page)
+          ? Math.max(1, Math.floor(payload.page))
+          : 1,
+      scrollTop:
+        typeof payload.scrollTop === "number" &&
+        Number.isFinite(payload.scrollTop)
+          ? Math.max(0, payload.scrollTop)
+          : 0,
+      sourceCategoriesOpen:
+        typeof payload.sourceCategoriesOpen === "boolean"
+          ? payload.sourceCategoriesOpen
+          : true,
+      yanaiCategoriesOpen:
+        typeof payload.yanaiCategoriesOpen === "boolean"
+          ? payload.yanaiCategoriesOpen
+          : true,
+    }
+  } catch {
+    return null
+  }
+}
+
+function writePromptCenterViewState(state: PromptCenterViewState) {
+  if (typeof window === "undefined") return
+
+  try {
+    window.sessionStorage.setItem(
+      PROMPT_CENTER_VIEW_STATE_KEY,
+      JSON.stringify(state)
+    )
+  } catch {
+    // 忽略浏览器存储不可用的情况，页面仍按普通方式工作。
+  }
+}
+
 export default function Page() {
   const router = useRouter()
   const [keyword, setKeyword] = useState("")
@@ -71,6 +149,11 @@ export default function Page() {
   const [sourceCategoriesOpen, setSourceCategoriesOpen] = useState(true)
   const [yanaiCategoriesOpen, setYanaiCategoriesOpen] = useState(true)
   const searchRef = useRef<HTMLInputElement>(null)
+  const contentRef = useRef<HTMLElement>(null)
+  const savedScrollTopRef = useRef(0)
+  const scrollFrameRef = useRef<number | null>(null)
+  const hasRestoredScrollRef = useRef(false)
+  const [viewStateReady, setViewStateReady] = useState(false)
 
   const stats = usePromptStats()
   const promptList = usePromptList({
@@ -123,11 +206,154 @@ export default function Page() {
   const activeTagLabel = selectedTags.length
     ? selectedTags.map(getTagLabel).join(" / ")
     : "全部标签"
-  useEffect(() => {
-    if (page > promptList.totalPages) {
-      setPage(promptList.totalPages)
+
+  const getCurrentPromptCenterScrollTop = useCallback(() => {
+    if (!hasRestoredScrollRef.current && savedScrollTopRef.current > 0) {
+      return savedScrollTopRef.current
     }
-  }, [page, promptList.totalPages])
+
+    const contentScrollTop = contentRef.current?.scrollTop ?? 0
+    if (contentScrollTop > 0) return contentScrollTop
+    if (typeof window === "undefined") return contentScrollTop
+
+    return Math.max(
+      window.scrollY,
+      document.documentElement.scrollTop,
+      document.body.scrollTop
+    )
+  }, [])
+
+  const savePromptCenterState = useCallback(
+    (overrides: Partial<PromptCenterViewState> = {}) => {
+      const nextState: PromptCenterViewState = {
+        keyword,
+        category,
+        selectedTags,
+        source,
+        view,
+        page,
+        scrollTop: getCurrentPromptCenterScrollTop(),
+        sourceCategoriesOpen,
+        yanaiCategoriesOpen,
+        ...overrides,
+      }
+
+      savedScrollTopRef.current = nextState.scrollTop
+      writePromptCenterViewState(nextState)
+    },
+    [
+      keyword,
+      category,
+      selectedTags,
+      source,
+      view,
+      page,
+      sourceCategoriesOpen,
+      yanaiCategoriesOpen,
+      getCurrentPromptCenterScrollTop,
+    ]
+  )
+
+  const queuePromptCenterStateSave = useCallback(() => {
+    if (!viewStateReady || scrollFrameRef.current !== null) return
+
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      savePromptCenterState({
+        scrollTop: getCurrentPromptCenterScrollTop(),
+      })
+    })
+  }, [viewStateReady, savePromptCenterState, getCurrentPromptCenterScrollTop])
+
+  const handleContentScroll = useCallback(() => {
+    savedScrollTopRef.current = getCurrentPromptCenterScrollTop()
+    queuePromptCenterStateSave()
+  }, [getCurrentPromptCenterScrollTop, queuePromptCenterStateSave])
+
+  const openImageWorkbench = useCallback(() => {
+    savePromptCenterState()
+    router.push("/image")
+  }, [router, savePromptCenterState])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const restored = readPromptCenterViewState()
+      if (restored) {
+        setKeyword(restored.keyword)
+        setCategory(restored.category)
+        setSelectedTags(restored.selectedTags)
+        setSource(restored.source)
+        setView(restored.view)
+        setPage(restored.page)
+        setSourceCategoriesOpen(restored.sourceCategoriesOpen)
+        setYanaiCategoriesOpen(restored.yanaiCategoriesOpen)
+        savedScrollTopRef.current = restored.scrollTop
+      }
+      setViewStateReady(true)
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  useEffect(() => {
+    if (!viewStateReady) return
+    savePromptCenterState()
+  }, [viewStateReady, savePromptCenterState])
+
+  useEffect(() => {
+    if (!viewStateReady) return
+
+    const handleWindowScroll = () => queuePromptCenterStateSave()
+    window.addEventListener("scroll", handleWindowScroll, { passive: true })
+    return () => window.removeEventListener("scroll", handleWindowScroll)
+  }, [viewStateReady, queuePromptCenterStateSave])
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (
+      !viewStateReady ||
+      hasRestoredScrollRef.current ||
+      promptList.isLoading
+    ) {
+      return
+    }
+
+    const scrollTop = savedScrollTopRef.current
+    if (scrollTop <= 0) {
+      hasRestoredScrollRef.current = true
+      return
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      contentRef.current?.scrollTo({ top: scrollTop })
+      window.scrollTo({ top: scrollTop })
+      hasRestoredScrollRef.current = true
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    viewStateReady,
+    promptList.isLoading,
+    promptList.items.length,
+    promptList.total,
+  ])
+
+  useEffect(() => {
+    if (!promptList.isLoading && page > promptList.totalPages) {
+      const frame = window.requestAnimationFrame(() => {
+        setPage(promptList.totalPages)
+      })
+
+      return () => window.cancelAnimationFrame(frame)
+    }
+  }, [page, promptList.isLoading, promptList.totalPages])
 
   useEffect(() => {
     if (!toast) return
@@ -168,7 +394,7 @@ export default function Page() {
     }
   }
 
-  const usePromptForImage = (prompt: Prompt) => {
+  const sendPromptToImageWorkbench = (prompt: Prompt) => {
     const snapshot: SourcePromptSnapshot = {
       id: prompt.id,
       title: prompt.title,
@@ -183,6 +409,7 @@ export default function Page() {
     )
     setSelectedPrompt(null)
     setSelectOpen(false)
+    savePromptCenterState()
     showToast(`已发送「${prompt.title}」到图片工作台`)
     router.push(`/image?promptId=${encodeURIComponent(prompt.id)}`)
   }
@@ -283,7 +510,7 @@ export default function Page() {
             variant="outline"
             onMouseEnter={() => router.prefetch("/image")}
             onFocus={() => router.prefetch("/image")}
-            onClick={() => router.push("/image")}
+            onClick={openImageWorkbench}
           >
             <ImagePlus className="size-4" />
             图片工作台
@@ -400,7 +627,11 @@ export default function Page() {
           </div>
         </aside>
 
-        <section className="min-w-0 overflow-auto p-6 max-lg:p-4">
+        <section
+          ref={contentRef}
+          className="min-w-0 overflow-auto p-6 max-lg:p-4"
+          onScroll={handleContentScroll}
+        >
           <div className="mb-5 flex items-end justify-between gap-4 max-md:block">
             <div>
               <h1 className="text-3xl font-semibold tracking-normal">提示词</h1>
@@ -552,7 +783,7 @@ export default function Page() {
                     view={view === "compact" ? "compact" : "grid"}
                     onOpen={() => setSelectedPrompt(prompt)}
                     onCopy={() => void copyPrompt(prompt)}
-                    onUseForImage={() => usePromptForImage(prompt)}
+                    onUseForImage={() => sendPromptToImageWorkbench(prompt)}
                   />
                 ))}
               </div>
@@ -571,12 +802,12 @@ export default function Page() {
         prompt={selectedPrompt}
         onClose={() => setSelectedPrompt(null)}
         onCopy={(prompt) => void copyPrompt(prompt)}
-        onSelect={usePromptForImage}
+        onSelect={sendPromptToImageWorkbench}
       />
       <PromptSelectDialog
         open={selectOpen}
         onOpenChange={setSelectOpen}
-        onSelect={usePromptForImage}
+        onSelect={sendPromptToImageWorkbench}
       />
 
       {toast ? (
