@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Check,
   Database,
+  FileVideo,
   ImagePlus,
   Loader2,
   Plus,
@@ -293,6 +294,11 @@ export default function Page() {
     router.push("/image")
   }, [router, savePromptCenterState])
 
+  const openVideoFactory = useCallback(() => {
+    savePromptCenterState({ page: pageRef.current })
+    router.push("/video")
+  }, [router, savePromptCenterState])
+
   const setPromptCenterPage = useCallback(
     (nextPage: number) => {
       const safePage = Math.max(1, Math.floor(nextPage))
@@ -413,6 +419,7 @@ export default function Page() {
 
   useEffect(() => {
     router.prefetch("/image")
+    router.prefetch("/video")
   }, [router])
 
   const copyPrompt = async (prompt: Prompt) => {
@@ -544,6 +551,15 @@ export default function Page() {
           >
             <ImagePlus className="size-4" />
             图片工作台
+          </Button>
+          <Button
+            variant="outline"
+            onMouseEnter={() => router.prefetch("/video")}
+            onFocus={() => router.prefetch("/video")}
+            onClick={openVideoFactory}
+          >
+            <FileVideo className="size-4" />
+            视频工厂
           </Button>
           <Button onClick={() => showToast("新建提示词暂未接入")}>
             <Plus className="size-4" />
