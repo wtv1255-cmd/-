@@ -8,6 +8,16 @@ declare global {
     promptCenterDesktop?: {
       setTheme: (theme: "light" | "dark") => void
       readDefaultApiSettings?: () => Promise<unknown>
+      saveFileToDownloads?: (input: {
+        filename: string
+        mimeType?: string
+        data: ArrayBuffer
+      }) => Promise<{
+        canceled?: boolean
+        filePath?: string
+        directory?: string
+        error?: string
+      }>
     }
   }
 }

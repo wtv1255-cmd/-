@@ -7,4 +7,7 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   readDefaultApiSettings() {
     return ipcRenderer.invoke("ta-huo:read-default-api-settings")
   },
+  saveFileToDownloads(input) {
+    return ipcRenderer.invoke("ta-huo:save-file-to-downloads", input)
+  },
 })

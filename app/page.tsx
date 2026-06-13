@@ -77,45 +77,54 @@ function isPromptViewMode(value: unknown): value is PromptViewMode {
   return value === "grid" || value === "compact" || value === "review"
 }
 
+function parsePromptCenterViewState(raw: string | null) {
+  if (!raw) return null
+
+  const payload = JSON.parse(raw) as Partial<PromptCenterViewState>
+  return {
+    keyword: typeof payload.keyword === "string" ? payload.keyword : "",
+    category:
+      typeof payload.category === "string"
+        ? payload.category
+        : ALL_PROMPTS_OPTION,
+    selectedTags: Array.isArray(payload.selectedTags)
+      ? payload.selectedTags.filter(
+          (item): item is string => typeof item === "string"
+        )
+      : [],
+    source: isPromptSource(payload.source) ? payload.source : "all",
+    view: isPromptViewMode(payload.view) ? payload.view : "grid",
+    page:
+      typeof payload.page === "number" && Number.isFinite(payload.page)
+        ? Math.max(1, Math.floor(payload.page))
+        : 1,
+    scrollTop:
+      typeof payload.scrollTop === "number" && Number.isFinite(payload.scrollTop)
+        ? Math.max(0, payload.scrollTop)
+        : 0,
+    sourceCategoriesOpen:
+      typeof payload.sourceCategoriesOpen === "boolean"
+        ? payload.sourceCategoriesOpen
+        : true,
+    yanaiCategoriesOpen:
+      typeof payload.yanaiCategoriesOpen === "boolean"
+        ? payload.yanaiCategoriesOpen
+        : true,
+  }
+}
+
 function readPromptCenterViewState(): PromptCenterViewState | null {
   if (typeof window === "undefined") return null
 
   try {
-    const raw = window.sessionStorage.getItem(PROMPT_CENTER_VIEW_STATE_KEY)
-    if (!raw) return null
-
-    const payload = JSON.parse(raw) as Partial<PromptCenterViewState>
-    return {
-      keyword: typeof payload.keyword === "string" ? payload.keyword : "",
-      category:
-        typeof payload.category === "string"
-          ? payload.category
-          : ALL_PROMPTS_OPTION,
-      selectedTags: Array.isArray(payload.selectedTags)
-        ? payload.selectedTags.filter(
-            (item): item is string => typeof item === "string"
-          )
-        : [],
-      source: isPromptSource(payload.source) ? payload.source : "all",
-      view: isPromptViewMode(payload.view) ? payload.view : "grid",
-      page:
-        typeof payload.page === "number" && Number.isFinite(payload.page)
-          ? Math.max(1, Math.floor(payload.page))
-          : 1,
-      scrollTop:
-        typeof payload.scrollTop === "number" &&
-        Number.isFinite(payload.scrollTop)
-          ? Math.max(0, payload.scrollTop)
-          : 0,
-      sourceCategoriesOpen:
-        typeof payload.sourceCategoriesOpen === "boolean"
-          ? payload.sourceCategoriesOpen
-          : true,
-      yanaiCategoriesOpen:
-        typeof payload.yanaiCategoriesOpen === "boolean"
-          ? payload.yanaiCategoriesOpen
-          : true,
-    }
+    return (
+      parsePromptCenterViewState(
+        window.sessionStorage.getItem(PROMPT_CENTER_VIEW_STATE_KEY)
+      ) ||
+      parsePromptCenterViewState(
+        window.localStorage.getItem(PROMPT_CENTER_VIEW_STATE_KEY)
+      )
+    )
   } catch {
     return null
   }
@@ -126,6 +135,10 @@ function writePromptCenterViewState(state: PromptCenterViewState) {
 
   try {
     window.sessionStorage.setItem(
+      PROMPT_CENTER_VIEW_STATE_KEY,
+      JSON.stringify(state)
+    )
+    window.localStorage.setItem(
       PROMPT_CENTER_VIEW_STATE_KEY,
       JSON.stringify(state)
     )
@@ -150,6 +163,7 @@ export default function Page() {
   const [yanaiCategoriesOpen, setYanaiCategoriesOpen] = useState(true)
   const searchRef = useRef<HTMLInputElement>(null)
   const contentRef = useRef<HTMLElement>(null)
+  const pageRef = useRef(1)
   const savedScrollTopRef = useRef(0)
   const scrollFrameRef = useRef<number | null>(null)
   const hasRestoredScrollRef = useRef(false)
@@ -223,6 +237,10 @@ export default function Page() {
     )
   }, [])
 
+  useEffect(() => {
+    pageRef.current = page
+  }, [page])
+
   const savePromptCenterState = useCallback(
     (overrides: Partial<PromptCenterViewState> = {}) => {
       const nextState: PromptCenterViewState = {
@@ -271,9 +289,19 @@ export default function Page() {
   }, [getCurrentPromptCenterScrollTop, queuePromptCenterStateSave])
 
   const openImageWorkbench = useCallback(() => {
-    savePromptCenterState()
+    savePromptCenterState({ page: pageRef.current })
     router.push("/image")
   }, [router, savePromptCenterState])
+
+  const setPromptCenterPage = useCallback(
+    (nextPage: number) => {
+      const safePage = Math.max(1, Math.floor(nextPage))
+      pageRef.current = safePage
+      setPage(safePage)
+      savePromptCenterState({ page: safePage })
+    },
+    [savePromptCenterState]
+  )
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -284,6 +312,7 @@ export default function Page() {
         setSelectedTags(restored.selectedTags)
         setSource(restored.source)
         setView(restored.view)
+        pageRef.current = restored.page
         setPage(restored.page)
         setSourceCategoriesOpen(restored.sourceCategoriesOpen)
         setYanaiCategoriesOpen(restored.yanaiCategoriesOpen)
@@ -348,6 +377,7 @@ export default function Page() {
   useEffect(() => {
     if (!promptList.isLoading && page > promptList.totalPages) {
       const frame = window.requestAnimationFrame(() => {
+        pageRef.current = promptList.totalPages
         setPage(promptList.totalPages)
       })
 
@@ -377,7 +407,7 @@ export default function Page() {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
-  const resetPage = () => setPage(1)
+  const resetPage = () => setPromptCenterPage(1)
 
   const showToast = (message: string) => setToast(message)
 
@@ -409,7 +439,7 @@ export default function Page() {
     )
     setSelectedPrompt(null)
     setSelectOpen(false)
-    savePromptCenterState()
+    savePromptCenterState({ page: pageRef.current })
     showToast(`已发送「${prompt.title}」到图片工作台`)
     router.push(`/image?promptId=${encodeURIComponent(prompt.id)}`)
   }
@@ -791,7 +821,7 @@ export default function Page() {
               <Pagination
                 page={promptList.safePage}
                 totalPages={promptList.totalPages}
-                onChange={setPage}
+                onChange={setPromptCenterPage}
               />
             </>
           ) : null}

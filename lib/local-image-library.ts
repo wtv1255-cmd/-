@@ -166,7 +166,15 @@ function dataUrlToBlob(dataUrl: string, fallbackMimeType = "") {
   return new Blob([bytes], { type: mimeType })
 }
 
-export function downloadBlob(blob: Blob, filename: string) {
+export type DownloadBlobResult = {
+  canceled: boolean
+  desktop: boolean
+  filePath?: string
+  directory?: string
+  error?: string
+}
+
+function downloadBlobInBrowser(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement("a")
   anchor.href = url
@@ -175,6 +183,38 @@ export function downloadBlob(blob: Blob, filename: string) {
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export async function downloadBlob(
+  blob: Blob,
+  filename: string
+): Promise<DownloadBlobResult> {
+  const desktopSave = window.promptCenterDesktop?.saveFileToDownloads
+  if (desktopSave) {
+    try {
+      const result = await desktopSave({
+        filename,
+        mimeType: blob.type,
+        data: await blob.arrayBuffer(),
+      })
+      return {
+        canceled: Boolean(result?.canceled),
+        desktop: true,
+        filePath: result?.filePath,
+        directory: result?.directory,
+        error: result?.error,
+      }
+    } catch (error) {
+      return {
+        canceled: false,
+        desktop: true,
+        error: error instanceof Error ? error.message : "保存文件失败",
+      }
+    }
+  }
+
+  downloadBlobInBrowser(blob, filename)
+  return { canceled: false, desktop: false }
 }
 
 export async function readImageMeta(blob: Blob) {

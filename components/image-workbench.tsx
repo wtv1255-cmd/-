@@ -399,6 +399,16 @@ function resetGenerationSession() {
   emitGenerationSession()
 }
 
+function deleteGenerationResult(id: string) {
+  setGenerationResults((current) =>
+    current.filter((item) => {
+      if (item.id !== id) return true
+      if (item.image) URL.revokeObjectURL(item.image.url)
+      return false
+    })
+  )
+}
+
 function enqueueGenerationJob(job: QueuedGenerationJob) {
   generationJobQueue.push(job)
   generationSessionSnapshot = {
@@ -659,6 +669,23 @@ export function ImageWorkbench() {
     if (mountedRef.current) setToast(message)
   }
 
+  const downloadWorkbenchBlob = async (blob: Blob, filename: string) => {
+    const result = await downloadBlob(blob, filename)
+    if (result.error) {
+      showToast(result.error)
+      return
+    }
+    if (result.canceled) {
+      showToast("已取消下载")
+      return
+    }
+    showToast(result.desktop ? "已保存到上次选择的目录" : "已开始下载")
+  }
+
+  const returnToPromptCenter = () => {
+    router.push("/")
+  }
+
   const updateSetting = <K extends keyof ImageSettings>(
     key: K,
     value: ImageSettings[K]
@@ -916,6 +943,11 @@ export function ImageWorkbench() {
     }
   }
 
+  const deleteResult = (result: QueuedGenerationResult) => {
+    deleteGenerationResult(result.id)
+    showToast("已删除生成结果")
+  }
+
   const addGeneratedAsReference = (image: GeneratedImage) => {
     const extension = image.mimeType.includes("jpeg")
       ? "jpg"
@@ -1031,7 +1063,7 @@ export function ImageWorkbench() {
     )
   }
 
-  const exportGalleryIndex = (cards: LocalImageCard[]) => {
+  const exportGalleryIndex = async (cards: LocalImageCard[]) => {
     if (!cards.length) {
       showToast("没有可导出的图库记录")
       return
@@ -1046,8 +1078,7 @@ export function ImageWorkbench() {
       type: "application/json",
     })
     const stamp = new Date().toISOString().slice(0, 10)
-    downloadBlob(blob, `prompt-center-gallery-${stamp}.json`)
-    showToast(`已导出 ${cards.length} 条图库索引`)
+    await downloadWorkbenchBlob(blob, `prompt-center-gallery-${stamp}.json`)
   }
 
   const deleteGalleryCard = async (card: LocalImageCard) => {
@@ -1142,7 +1173,7 @@ export function ImageWorkbench() {
             variant="outline"
             onMouseEnter={() => router.prefetch("/")}
             onFocus={() => router.prefetch("/")}
-            onClick={() => router.push("/")}
+            onClick={returnToPromptCenter}
           >
             <BookOpen className="size-4" />
             提示词
@@ -1307,7 +1338,7 @@ export function ImageWorkbench() {
                           variant="outline"
                           onMouseEnter={() => router.prefetch("/")}
                           onFocus={() => router.prefetch("/")}
-                          onClick={() => router.push("/")}
+                          onClick={returnToPromptCenter}
                         >
                           <BookOpen className="size-3.5" />
                           选提示词
@@ -1485,6 +1516,8 @@ export function ImageWorkbench() {
                         result={result}
                         index={index}
                         onSave={saveResult}
+                        onDelete={deleteResult}
+                        onDownload={downloadWorkbenchBlob}
                         onUseReference={addGeneratedAsReference}
                         onSafetyRewrite={() => void rewritePromptForSafety()}
                         isRewritingPrompt={isRewritingPrompt}
@@ -1550,6 +1583,7 @@ export function ImageWorkbench() {
               onExport={exportGalleryIndex}
               onUsePrompt={useGalleryPrompt}
               onUseReference={useGalleryImageAsReference}
+              onDownload={downloadWorkbenchBlob}
               onDelete={deleteGalleryCard}
               onPreview={(preview) => setPreviewImage(preview)}
             />
@@ -1595,6 +1629,7 @@ export function ImageWorkbench() {
       <ImagePreviewDialog
         preview={previewImage}
         onClose={() => setPreviewImage(null)}
+        onDownload={downloadWorkbenchBlob}
       />
       <ApiSettingsDialog
         open={apiSettingsOpen}
@@ -2411,6 +2446,8 @@ function ResultCard({
   result,
   index,
   onSave,
+  onDelete,
+  onDownload,
   onUseReference,
   onSafetyRewrite,
   isRewritingPrompt,
@@ -2419,6 +2456,8 @@ function ResultCard({
   result: QueuedGenerationResult
   index: number
   onSave: (result: QueuedGenerationResult) => Promise<void>
+  onDelete: (result: QueuedGenerationResult) => void
+  onDownload: (blob: Blob, filename: string) => Promise<void>
   onUseReference: (image: GeneratedImage) => void
   onSafetyRewrite: () => void
   isRewritingPrompt: boolean
@@ -2426,7 +2465,8 @@ function ResultCard({
 }) {
   if (result.status === "pending") {
     return (
-      <div className="grid aspect-square place-items-center rounded-md border border-dashed border-zinc-800 bg-black">
+      <div className="relative grid aspect-square place-items-center rounded-md border border-dashed border-zinc-800 bg-black">
+        <ResultDeleteButton onDelete={() => onDelete(result)} />
         <div className="text-center text-sm text-zinc-400">
           <Loader2 className="mx-auto mb-2 size-6 animate-spin" />
           生成中
@@ -2440,7 +2480,8 @@ function ResultCard({
 
   if (result.status === "failed") {
     return (
-      <div className="grid aspect-square place-items-center rounded-md border border-red-900 bg-red-950/20 p-4 text-center">
+      <div className="relative grid aspect-square place-items-center rounded-md border border-red-900 bg-red-950/20 p-4 text-center">
+        <ResultDeleteButton onDelete={() => onDelete(result)} />
         <div>
           <div className="font-medium text-red-200">生成失败</div>
           <p className="mt-2 text-xs leading-5 text-red-300">{result.error}</p>
@@ -2472,7 +2513,8 @@ function ResultCard({
     : image.mimeType.split("/")[1] || "png"
 
   return (
-    <article className="overflow-hidden rounded-md border bg-background">
+    <article className="relative overflow-hidden rounded-md border bg-background">
+      <ResultDeleteButton onDelete={() => onDelete(result)} />
       <div
         className="grid aspect-square cursor-zoom-in place-items-center bg-black"
         onClick={() => onPreview(image)}
@@ -2513,7 +2555,10 @@ function ResultCard({
             variant="outline"
             size="sm"
             onClick={() =>
-              downloadBlob(image.blob, `generated-${index + 1}.${extension}`)
+              void onDownload(
+                image.blob,
+                `generated-${index + 1}.${extension}`
+              )
             }
           >
             <Download className="size-3.5" />
@@ -2522,6 +2567,24 @@ function ResultCard({
         </div>
       </div>
     </article>
+  )
+}
+
+function ResultDeleteButton({ onDelete }: { onDelete: () => void }) {
+  return (
+    <Button
+      size="icon"
+      variant="outline"
+      className="absolute top-2 right-2 z-10 size-8 border-zinc-700 bg-black/70 text-zinc-100 hover:bg-red-950 hover:text-red-100"
+      onClick={(event) => {
+        event.stopPropagation()
+        onDelete()
+      }}
+      aria-label="删除生成结果"
+      title="删除生成结果"
+    >
+      <Trash2 className="size-3.5" />
+    </Button>
   )
 }
 
@@ -2577,15 +2640,17 @@ function GalleryView({
   onExport,
   onUsePrompt,
   onUseReference,
+  onDownload,
   onDelete,
   onPreview,
 }: {
   cards: LocalImageCard[]
   onRefresh: () => Promise<void>
   onImport: () => void
-  onExport: (cards: LocalImageCard[]) => void
+  onExport: (cards: LocalImageCard[]) => Promise<void>
   onUsePrompt: (card: LocalImageCard) => void
   onUseReference: (card: LocalImageCard) => Promise<void>
+  onDownload: (blob: Blob, filename: string) => Promise<void>
   onDelete: (card: LocalImageCard) => Promise<void>
   onPreview: (preview: ImagePreview) => void
 }) {
@@ -2632,7 +2697,10 @@ function GalleryView({
             <Upload className="size-4" />
             导入
           </Button>
-          <Button variant="outline" onClick={() => onExport(filteredCards)}>
+          <Button
+            variant="outline"
+            onClick={() => void onExport(filteredCards)}
+          >
             <FileJson className="size-4" />
             导出索引
           </Button>
@@ -2699,6 +2767,7 @@ function GalleryView({
               card={card}
               onUsePrompt={onUsePrompt}
               onUseReference={onUseReference}
+              onDownload={onDownload}
               onDelete={onDelete}
               onPreview={onPreview}
             />
@@ -2725,12 +2794,14 @@ function GalleryCard({
   card,
   onUsePrompt,
   onUseReference,
+  onDownload,
   onDelete,
   onPreview,
 }: {
   card: LocalImageCard
   onUsePrompt: (card: LocalImageCard) => void
   onUseReference: (card: LocalImageCard) => Promise<void>
+  onDownload: (blob: Blob, filename: string) => Promise<void>
   onDelete: (card: LocalImageCard) => Promise<void>
   onPreview: (preview: ImagePreview) => void
 }) {
@@ -2820,7 +2891,7 @@ function GalleryCard({
             variant="outline"
             onClick={() =>
               void getLocalImageBlob(card).then((blob) =>
-                downloadBlob(
+                onDownload(
                   blob,
                   `${sanitizeFilename(card.title)}.${card.mimeType.includes("jpeg") ? "jpg" : card.mimeType.split("/")[1] || "png"}`
                 )
@@ -2847,9 +2918,11 @@ function GalleryCard({
 function ImagePreviewDialog({
   preview,
   onClose,
+  onDownload,
 }: {
   preview: ImagePreview | null
   onClose: () => void
+  onDownload: (blob: Blob, filename: string) => Promise<void>
 }) {
   if (!preview) return null
 
@@ -2876,7 +2949,10 @@ function ImagePreviewDialog({
               variant="outline"
               className="border-zinc-700 bg-zinc-950 text-zinc-50 hover:bg-zinc-800"
               onClick={() =>
-                downloadBlob(preview.blob as Blob, preview.filename as string)
+                void onDownload(
+                  preview.blob as Blob,
+                  preview.filename as string
+                )
               }
             >
               <Download className="size-4" />

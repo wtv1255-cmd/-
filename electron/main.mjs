@@ -67,6 +67,114 @@ ipcMain.handle("ta-huo:read-default-api-settings", () => {
   }
 })
 
+function readDownloadDirectory() {
+  try {
+    const downloadSettingsPath = getDownloadSettingsPath()
+    if (!fs.existsSync(downloadSettingsPath)) return ""
+    const settings = JSON.parse(fs.readFileSync(downloadSettingsPath, "utf8"))
+    const directory =
+      typeof settings.directory === "string" ? settings.directory : ""
+    return directory && fs.existsSync(directory) ? directory : ""
+  } catch {
+    return ""
+  }
+}
+
+function getDownloadSettingsPath() {
+  return path.join(app.getPath("userData"), "download-settings.json")
+}
+
+function writeDownloadDirectory(directory) {
+  const downloadSettingsPath = getDownloadSettingsPath()
+  fs.mkdirSync(path.dirname(downloadSettingsPath), { recursive: true })
+  fs.writeFileSync(
+    downloadSettingsPath,
+    JSON.stringify({ directory }, null, 2),
+    "utf8"
+  )
+}
+
+function sanitizeDownloadFilename(value) {
+  const fallback = "download.png"
+  const filename = String(value || fallback)
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+  return filename || fallback
+}
+
+function getDownloadFilters(filename, mimeType) {
+  const extension = path.extname(filename).replace(".", "").toLowerCase()
+  if (mimeType === "image/jpeg" || extension === "jpg" || extension === "jpeg") {
+    return [{ name: "JPEG 图片文件", extensions: ["jpg", "jpeg"] }]
+  }
+  if (mimeType === "image/webp" || extension === "webp") {
+    return [{ name: "WebP 图片文件", extensions: ["webp"] }]
+  }
+  if (mimeType === "application/json" || extension === "json") {
+    return [{ name: "JSON 文件", extensions: ["json"] }]
+  }
+  return [{ name: "PNG 图片文件", extensions: ["png"] }]
+}
+
+function uniqueDownloadPath(directory, filename) {
+  const parsed = path.parse(filename)
+  let filePath = path.join(directory, filename)
+  let index = 1
+
+  while (fs.existsSync(filePath)) {
+    filePath = path.join(
+      directory,
+      `${parsed.name}-${index}${parsed.ext || ".png"}`
+    )
+    index += 1
+  }
+
+  return filePath
+}
+
+ipcMain.handle("ta-huo:save-file-to-downloads", async (_event, input) => {
+  try {
+    const filename = sanitizeDownloadFilename(input?.filename)
+    const mimeType = typeof input?.mimeType === "string" ? input.mimeType : ""
+    const data = input?.data
+    if (!data) throw new Error("文件数据为空")
+
+    const bytes =
+      data instanceof ArrayBuffer
+        ? Buffer.from(new Uint8Array(data))
+        : Buffer.from(data)
+    let directory = readDownloadDirectory()
+    let filePath = ""
+
+    if (!directory) {
+      const defaultDirectory = app.getPath("pictures") || app.getPath("desktop")
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: "保存图片",
+        defaultPath: path.join(defaultDirectory, filename),
+        filters: getDownloadFilters(filename, mimeType),
+      })
+      if (result.canceled || !result.filePath) {
+        return { canceled: true }
+      }
+      filePath = result.filePath
+      directory = path.dirname(filePath)
+      writeDownloadDirectory(directory)
+    } else {
+      fs.mkdirSync(directory, { recursive: true })
+      filePath = uniqueDownloadPath(directory, filename)
+    }
+
+    fs.writeFileSync(filePath, bytes)
+    return { canceled: false, filePath, directory }
+  } catch (error) {
+    return {
+      canceled: false,
+      error: error instanceof Error ? error.message : "保存文件失败",
+    }
+  }
+})
+
 function logStartup(message) {
   try {
     const logPath = path.join(app.getPath("userData"), "startup.log")
