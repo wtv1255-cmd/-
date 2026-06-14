@@ -46,6 +46,9 @@ import {
   createVideoTaskSnapshot,
   readVideoTaskSnapshot,
   saveVideoTaskSnapshot,
+  type StoryboardShot,
+  type VideoDurationPreset,
+  type VideoPackageId,
   type VideoTaskSnapshot,
 } from "@/lib/video-domain"
 import {
@@ -69,6 +72,11 @@ import {
   createScriptGenerationLogEntry,
   type VideoAnalysisDraft,
 } from "@/lib/video-analysis"
+import {
+  VIDEO_DURATION_OPTIONS,
+  VIDEO_PACKAGE_OPTIONS,
+  createStoryboardFromScript,
+} from "@/lib/video-storyboard"
 import {
   collectViralSourceCandidates,
   createDouyinLinkSourceCandidate,
@@ -128,6 +136,12 @@ function VideoFactoryShell() {
   const [analysisDraft, setAnalysisDraft] = useState<VideoAnalysisDraft | null>(
     null
   )
+  const [selectedPackages, setSelectedPackages] = useState<VideoPackageId[]>([
+    "stickman_meme",
+  ])
+  const [selectedDuration, setSelectedDuration] =
+    useState<VideoDurationPreset>("45-60s")
+  const [storyboardShots, setStoryboardShots] = useState<StoryboardShot[]>([])
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -397,6 +411,58 @@ function VideoFactoryShell() {
     setToast("已生成可编辑脚本草稿")
   }
 
+  const togglePackage = (packageId: VideoPackageId) => {
+    setSelectedPackages((current) =>
+      current.includes(packageId)
+        ? current.filter((item) => item !== packageId)
+        : [...current, packageId]
+    )
+  }
+
+  const generateStoryboard = () => {
+    if (!analysisDraft) {
+      setToast("请先生成脚本草稿")
+      return
+    }
+    const nextShots = createStoryboardFromScript({
+      script: analysisDraft.originalScript,
+      packageIds: selectedPackages,
+      durationPreset: selectedDuration,
+    })
+    setStoryboardShots(nextShots)
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      storyboard: nextShots,
+      records: [
+        ...snapshot.records,
+        {
+          id: `storyboard_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "storyboard_generated",
+          message: `分镜已生成：${selectedPackages.join(" + ")} · ${selectedDuration}`,
+        },
+      ],
+    }))
+    setToast("已生成分镜")
+  }
+
+  const updateStoryboardShot = (
+    shotId: string,
+    patch: Partial<StoryboardShot>
+  ) => {
+    setStoryboardShots((current) =>
+      current.map((shot) =>
+        shot.id === shotId ? { ...shot, ...patch } : shot
+      )
+    )
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      storyboard: snapshot.storyboard.map((shot) =>
+        shot.id === shotId ? { ...shot, ...patch } : shot
+      ),
+    }))
+  }
+
   const persistDraft = (draft: PublishDraft) => {
     const safeDraft = sanitizePublishDraftForExport(draft)
     setPublishDraft(safeDraft)
@@ -550,6 +616,16 @@ function VideoFactoryShell() {
                   current ? { ...current, originalScript: value } : current
                 )
               }
+            />
+
+            <StoryboardPanel
+              selectedPackages={selectedPackages}
+              selectedDuration={selectedDuration}
+              shots={storyboardShots}
+              onTogglePackage={togglePackage}
+              onDurationChange={setSelectedDuration}
+              onGenerateStoryboard={generateStoryboard}
+              onUpdateShot={updateStoryboardShot}
             />
 
             <PublishPanel
@@ -1019,6 +1095,179 @@ function ScriptAnalysisPanel({
             等待来源解析。没有转写时可以直接输入主题生成可编辑脚本。
           </div>
         )}
+      </div>
+    </section>
+  )
+}
+
+function StoryboardPanel({
+  selectedPackages,
+  selectedDuration,
+  shots,
+  onTogglePackage,
+  onDurationChange,
+  onGenerateStoryboard,
+  onUpdateShot,
+}: {
+  selectedPackages: VideoPackageId[]
+  selectedDuration: VideoDurationPreset
+  shots: StoryboardShot[]
+  onTogglePackage: (packageId: VideoPackageId) => void
+  onDurationChange: (value: VideoDurationPreset) => void
+  onGenerateStoryboard: () => void
+  onUpdateShot: (shotId: string, patch: Partial<StoryboardShot>) => void
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">套餐分镜和火柴人提示词</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            选择套餐和时长后生成紧凑分镜行；火柴人镜头只显示可编辑提示词框。
+          </p>
+        </div>
+        <Layers3 className="size-5 text-muted-foreground" />
+      </div>
+
+      <div className="grid gap-4">
+        <div className="grid gap-3">
+          <div className="grid grid-cols-3 gap-2 max-lg:grid-cols-1">
+            {VIDEO_PACKAGE_OPTIONS.map((option) => {
+              const active = selectedPackages.includes(option.id)
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`rounded-lg border p-3 text-left transition ${
+                    active
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "bg-muted/30 hover:bg-muted"
+                  }`}
+                  onClick={() => onTogglePackage(option.id)}
+                >
+                  <div className="text-sm font-medium">{option.label}</div>
+                  <div className="mt-1 text-xs leading-5 opacity-80">
+                    {option.description}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grid min-w-48 gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                目标时长
+              </span>
+              <select
+                value={selectedDuration}
+                onChange={(event) =>
+                  onDurationChange(event.target.value as VideoDurationPreset)
+                }
+                className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+              >
+                {VIDEO_DURATION_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button onClick={onGenerateStoryboard}>
+              <Layers3 className="size-4" />
+              生成分镜
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          {shots.length ? (
+            shots.map((shot) => (
+              <article
+                key={shot.id}
+                className="grid gap-3 rounded-lg border bg-muted/30 p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border bg-background px-2 py-1 font-mono text-xs text-muted-foreground">
+                      {shot.id}
+                    </span>
+                    <span className="text-sm font-medium">
+                      {Math.round(shot.startMs / 1000)}-
+                      {Math.round(shot.endMs / 1000)}s
+                    </span>
+                  </div>
+                  <span className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">
+                    {shot.visualType}
+                  </span>
+                </div>
+
+                <label className="grid gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    口播文本
+                  </span>
+                  <input
+                    value={shot.voiceText}
+                    onChange={(event) =>
+                      onUpdateShot(shot.id, { voiceText: event.target.value })
+                    }
+                    className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+                  />
+                </label>
+
+                <label className="grid gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    画面说明
+                  </span>
+                  <input
+                    value={shot.visualDescription}
+                    onChange={(event) =>
+                      onUpdateShot(shot.id, {
+                        visualDescription: event.target.value,
+                      })
+                    }
+                    className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+                  />
+                </label>
+
+                {shot.visualType === "stickman" ? (
+                  <div className="grid gap-3 rounded-lg border bg-background p-3">
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        火柴人提示词
+                      </span>
+                      <textarea
+                        value={shot.prompt}
+                        onChange={(event) =>
+                          onUpdateShot(shot.id, { prompt: event.target.value })
+                        }
+                        className="min-h-24 rounded-lg border bg-background p-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring/20"
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        负面提示词
+                      </span>
+                      <textarea
+                        value={shot.negativePrompt}
+                        onChange={(event) =>
+                          onUpdateShot(shot.id, {
+                            negativePrompt: event.target.value,
+                          })
+                        }
+                        className="min-h-16 rounded-lg border bg-background p-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring/20"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+              </article>
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+              生成脚本后选择套餐和时长，即可创建可编辑分镜。
+            </div>
+          )}
+        </div>
       </div>
     </section>
   )
