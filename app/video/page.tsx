@@ -32,15 +32,13 @@ import {
   type PublishDraft,
 } from "@/lib/video-publish"
 import { hasLicenseFeature } from "@/lib/licensing"
-
-const workflowSections = [
-  ["爆款来源", "关键词、抖音链接或本地视频"],
-  ["脚本生成", "结构分析与原创文案"],
-  ["套餐和时长", "三类套餐与四档时长"],
-  ["分镜提示词", "火柴人镜头和可编辑提示词"],
-  ["素材与配音", "图片、炎灵素材、音频和字幕"],
-  ["剪辑发布", "导出、标题、封面和确认发布"],
-] as const
+import {
+  createVideoTask,
+  readVideoTasks,
+  saveVideoTasks,
+  type VideoTask,
+  type VideoWorkflowStepState,
+} from "@/lib/video-task"
 
 const defaultPublishAccount: PublishAccount = {
   id: "douyin-main",
@@ -60,9 +58,12 @@ export default function VideoFactoryPage() {
 
 function VideoFactoryShell() {
   const license = useLicenseVerification()
+  const [tasks, setTasks] = useState<VideoTask[]>([])
+  const [activeTaskId, setActiveTaskId] = useState("")
   const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null)
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
+  const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
 
   useEffect(() => {
     let alive = true
@@ -70,8 +71,13 @@ function VideoFactoryShell() {
       if (!alive) return
       try {
         setPublishDraft(readPublishDraft())
+        const restoredTasks = readVideoTasks()
+        setTasks(restoredTasks)
+        setActiveTaskId(restoredTasks[0]?.id || "")
       } catch {
         setPublishDraft(null)
+        setTasks([])
+        setActiveTaskId("")
       }
     })
     return () => {
@@ -84,6 +90,22 @@ function VideoFactoryShell() {
     const timer = window.setTimeout(() => setToast(""), 2300)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  const persistTasks = (nextTasks: VideoTask[], nextActiveId?: string) => {
+    setTasks(nextTasks)
+    saveVideoTasks(nextTasks)
+    if (nextActiveId !== undefined) {
+      setActiveTaskId(nextActiveId)
+    }
+  }
+
+  const createTask = () => {
+    const task = createVideoTask({
+      title: `她火视频任务 ${String(tasks.length + 1).padStart(2, "0")}`,
+    })
+    persistTasks([task, ...tasks], task.id)
+    setToast("已创建视频任务")
+  }
 
   const persistDraft = (draft: PublishDraft) => {
     const safeDraft = sanitizePublishDraftForExport(draft)
@@ -183,44 +205,30 @@ function VideoFactoryShell() {
             <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-semibold tracking-normal">
-                  单条视频成片任务
+                  视频工厂任务
                 </h1>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  当前授权已允许进入视频工厂。任务状态、脚本、分镜、素材、配音、剪辑、发布确认和记录将在这里按步骤推进。
+                  独立管理单条视频任务，按爆款来源、脚本、套餐、分镜、素材、配音、剪辑、发布和记录推进。
                 </p>
               </div>
-              <Button>
+              <Button onClick={createTask}>
                 <Sparkles className="size-4" />
                 新建任务
               </Button>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
-              {workflowSections.map(([title, description], index) => (
-                <article
-                  key={title}
-                  className="min-h-32 rounded-lg border bg-muted/30 p-4"
-                >
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <div className="grid size-8 place-items-center rounded-lg border bg-background">
-                      {index % 3 === 0 ? (
-                        <RadioTower className="size-4" />
-                      ) : index % 3 === 1 ? (
-                        <ListChecks className="size-4" />
-                      ) : (
-                        <Layers3 className="size-4" />
-                      )}
-                    </div>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
-                  </div>
-                  <h2 className="text-sm font-semibold">{title}</h2>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    {description}
-                  </p>
-                </article>
-              ))}
+            <div className="grid gap-4">
+              <TaskList
+                tasks={tasks}
+                activeTaskId={activeTask?.id || ""}
+                onSelectTask={setActiveTaskId}
+                onCreateTask={createTask}
+              />
+              {activeTask ? (
+                <WorkflowShell task={activeTask} />
+              ) : (
+                <EmptyTaskShell onCreateTask={createTask} />
+              )}
             </div>
           </div>
 
@@ -255,6 +263,165 @@ function VideoFactoryShell() {
         </div>
       ) : null}
     </main>
+  )
+}
+
+function TaskList({
+  tasks,
+  activeTaskId,
+  onSelectTask,
+  onCreateTask,
+}: {
+  tasks: VideoTask[]
+  activeTaskId: string
+  onSelectTask: (taskId: string) => void
+  onCreateTask: () => void
+}) {
+  if (!tasks.length) {
+    return (
+      <section className="rounded-lg border bg-muted/30 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">任务列表</h2>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              还没有视频任务。新建后会显示完整的单条成片流程。
+            </p>
+          </div>
+          <Button variant="outline" onClick={onCreateTask}>
+            <FileVideo className="size-4" />
+            新建任务
+          </Button>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rounded-lg border bg-muted/30 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">任务列表</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            每条任务独立保存状态和产物路径。
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onCreateTask}>
+          <Sparkles className="size-3.5" />
+          新建
+        </Button>
+      </div>
+      <div className="grid gap-2">
+        {tasks.map((task) => {
+          const active = task.id === activeTaskId
+          return (
+            <button
+              key={task.id}
+              type="button"
+              className={`rounded-lg border px-3 py-2 text-left transition ${
+                active
+                  ? "border-primary bg-background shadow-sm"
+                  : "bg-background/60 hover:bg-background"
+              }`}
+              onClick={() => onSelectTask(task.id)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm font-medium">
+                  {task.title}
+                </span>
+                <span className="rounded-md border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                  {task.status}
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {task.workflow.length} 步流程 ·{" "}
+                {task.createdAt.slice(0, 10)}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function EmptyTaskShell({ onCreateTask }: { onCreateTask: () => void }) {
+  return (
+    <section className="grid min-h-72 place-items-center rounded-lg border border-dashed bg-muted/30 p-6 text-center">
+      <div>
+        <FileVideo className="mx-auto mb-3 size-9 text-muted-foreground" />
+        <h2 className="text-base font-semibold">准备创建单条视频任务</h2>
+        <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
+          视频工厂是独立页面，不复用图片工作台状态。创建任务后会展开爆款来源到任务记录的完整流程。
+        </p>
+        <Button className="mt-4" onClick={onCreateTask}>
+          <Sparkles className="size-4" />
+          新建任务
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function WorkflowShell({ task }: { task: VideoTask }) {
+  return (
+    <section className="rounded-lg border bg-background p-4">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">{task.title}</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            任务工作流会把可编辑脚本、分镜、提示词、素材、配音、导出和发布确认分开记录。
+          </p>
+        </div>
+        <span className="rounded-lg border bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+          状态：{task.status}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
+        {task.workflow.map((step, index) => (
+          <article
+            key={step.id}
+            className="min-h-36 rounded-lg border bg-muted/30 p-4"
+          >
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="grid size-8 place-items-center rounded-lg border bg-background">
+                {index % 3 === 0 ? (
+                  <RadioTower className="size-4" />
+                ) : index % 3 === 1 ? (
+                  <ListChecks className="size-4" />
+                ) : (
+                  <Layers3 className="size-4" />
+                )}
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+            </div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">{step.title}</h3>
+              <StepStateBadge state={step.state} />
+            </div>
+            <p className="text-xs leading-5 text-muted-foreground">
+              {step.description}
+            </p>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function StepStateBadge({ state }: { state: VideoWorkflowStepState }) {
+  const labelMap: Record<VideoWorkflowStepState, string> = {
+    active: "当前",
+    queued: "排队",
+    locked: "待解锁",
+    done: "完成",
+  }
+  return (
+    <span className="shrink-0 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">
+      {labelMap[state]}
+    </span>
   )
 }
 
