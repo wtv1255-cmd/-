@@ -1,12 +1,17 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import {
+  AlertTriangle,
   Clock3,
   FileVideo,
   Layers3,
   ListChecks,
+  Lock,
   RadioTower,
+  Save,
   Sparkles,
+  UploadCloud,
 } from "lucide-react"
 
 import {
@@ -16,6 +21,17 @@ import {
 } from "@/components/license-gate"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
+import {
+  createPublishDraft,
+  readPublishDraft,
+  recordPublishAutomationResult,
+  savePublishDraft,
+  sanitizePublishDraftForExport,
+  startAuthorizedPublish,
+  type PublishAccount,
+  type PublishDraft,
+} from "@/lib/video-publish"
+import { hasLicenseFeature } from "@/lib/licensing"
 
 const workflowSections = [
   ["爆款来源", "关键词、抖音链接或本地视频"],
@@ -25,6 +41,14 @@ const workflowSections = [
   ["素材与配音", "图片、炎灵素材、音频和字幕"],
   ["剪辑发布", "导出、标题、封面和确认发布"],
 ] as const
+
+const defaultPublishAccount: PublishAccount = {
+  id: "douyin-main",
+  displayName: "抖音主账号",
+  platform: "douyin",
+  browserProfileId: "work",
+  authorized: true,
+}
 
 export default function VideoFactoryPage() {
   return (
@@ -36,6 +60,99 @@ export default function VideoFactoryPage() {
 
 function VideoFactoryShell() {
   const license = useLicenseVerification()
+  const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null)
+  const [toast, setToast] = useState("")
+  const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
+
+  useEffect(() => {
+    let alive = true
+    Promise.resolve().then(() => {
+      if (!alive) return
+      try {
+        setPublishDraft(readPublishDraft())
+      } catch {
+        setPublishDraft(null)
+      }
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(""), 2300)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  const persistDraft = (draft: PublishDraft) => {
+    const safeDraft = sanitizePublishDraftForExport(draft)
+    setPublishDraft(safeDraft)
+    savePublishDraft(safeDraft)
+  }
+
+  const generateDraft = () => {
+    persistDraft(
+      createPublishDraft({
+        taskId: "stage1-demo-task",
+        renderedVideoPath: "%APPDATA%/她火/tasks/stage1-demo/output/demo.mp4",
+        titleSeed: "她火一键做短视频：小白也能拆爆款",
+        scriptSummary:
+          "用她火助手把爆款结构拆成原创脚本，生成火柴人分镜、素材、配音和发布草稿。",
+        coverImagePath: "%APPDATA%/她火/tasks/stage1-demo/output/cover.png",
+        account: defaultPublishAccount,
+      })
+    )
+    setToast("已生成发布草稿")
+  }
+
+  const updateDraft = (patch: Partial<PublishDraft>) => {
+    if (!publishDraft) return
+    persistDraft({ ...publishDraft, ...patch })
+  }
+
+  const updateAccount = (patch: Partial<PublishAccount>) => {
+    if (!publishDraft) return
+    updateDraft({
+      account: {
+        ...publishDraft.account,
+        ...patch,
+      },
+    })
+  }
+
+  const confirmPublish = () => {
+    if (!publishDraft) return
+    if (!autoPublishEnabled) {
+      persistDraft(
+        recordPublishAutomationResult(
+          {
+            ...publishDraft,
+            status: "blocked",
+            manualActionRequired: true,
+          },
+          {
+            kind: "risk_prompt",
+            message: "自动发布功能未授权，请先激活自动发布套餐。",
+          }
+        )
+      )
+      return
+    }
+
+    persistDraft(startAuthorizedPublish(publishDraft, { confirmed: true }))
+    setToast("已确认，等待授权浏览器执行")
+  }
+
+  const simulateRiskPause = () => {
+    if (!publishDraft) return
+    persistDraft(
+      recordPublishAutomationResult(publishDraft, {
+        kind: "captcha",
+        message: "检测到验证码或风控提示，已暂停等待用户处理。",
+      })
+    )
+  }
 
   return (
     <main className="min-h-svh bg-muted/40 text-foreground">
@@ -61,7 +178,8 @@ function VideoFactoryShell() {
 
       <div className="mx-auto grid max-w-7xl gap-5 p-6 max-lg:p-4">
         <section className="grid grid-cols-[minmax(0,1fr)_340px] gap-5 max-xl:grid-cols-1">
-          <div className="rounded-lg border bg-background p-5">
+          <div className="grid gap-5">
+            <div className="rounded-lg border bg-background p-5">
             <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-semibold tracking-normal">
@@ -106,6 +224,17 @@ function VideoFactoryShell() {
             </div>
           </div>
 
+            <PublishPanel
+              draft={publishDraft}
+              autoPublishEnabled={autoPublishEnabled}
+              onGenerateDraft={generateDraft}
+              onUpdateDraft={updateDraft}
+              onUpdateAccount={updateAccount}
+              onConfirmPublish={confirmPublish}
+              onRiskPause={simulateRiskPause}
+            />
+          </div>
+
           <aside className="grid content-start gap-4">
             <div className="rounded-lg border bg-background p-4">
               <div className="mb-3 flex items-center gap-2">
@@ -120,6 +249,194 @@ function VideoFactoryShell() {
           </aside>
         </section>
       </div>
+      {toast ? (
+        <div className="fixed right-5 bottom-5 z-[60] rounded-lg border bg-foreground px-3 py-2 text-sm text-background shadow-lg">
+          {toast}
+        </div>
+      ) : null}
     </main>
+  )
+}
+
+function PublishPanel({
+  draft,
+  autoPublishEnabled,
+  onGenerateDraft,
+  onUpdateDraft,
+  onUpdateAccount,
+  onConfirmPublish,
+  onRiskPause,
+}: {
+  draft: PublishDraft | null
+  autoPublishEnabled: boolean
+  onGenerateDraft: () => void
+  onUpdateDraft: (patch: Partial<PublishDraft>) => void
+  onUpdateAccount: (patch: Partial<PublishAccount>) => void
+  onConfirmPublish: () => void
+  onRiskPause: () => void
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">发布确认</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            标题、话题、简介、封面和账号必须由用户确认后才会交给授权浏览器 Profile 执行。
+          </p>
+        </div>
+        <Button variant="outline" onClick={onGenerateDraft}>
+          <Save className="size-4" />
+          生成草稿
+        </Button>
+      </div>
+
+      {!draft ? (
+        <div className="grid min-h-60 place-items-center rounded-lg border border-dashed bg-muted/30 p-6 text-center">
+          <div>
+            <UploadCloud className="mx-auto mb-3 size-8 text-muted-foreground" />
+            <div className="font-medium">等待渲染输出</div>
+            <p className="mt-1 max-w-md text-sm leading-6 text-muted-foreground">
+              渲染完成后会生成可编辑的发布草稿。这里可以先生成一份本地草稿验证确认门和风险暂停流程。
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          <div className="grid grid-cols-2 gap-3 max-lg:grid-cols-1">
+            <TextField
+              label="标题"
+              value={draft.title}
+              onChange={(value) => onUpdateDraft({ title: value })}
+            />
+            <TextField
+              label="封面文件"
+              value={draft.coverImagePath}
+              onChange={(value) => onUpdateDraft({ coverImagePath: value })}
+            />
+            <TextField
+              label="话题"
+              value={draft.topics.join("、")}
+              onChange={(value) =>
+                onUpdateDraft({
+                  topics: value
+                    .split(/[、,，\s]+/u)
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+            <TextField
+              label="授权浏览器 Profile"
+              value={draft.account.browserProfileId}
+              onChange={(value) =>
+                onUpdateAccount({ browserProfileId: value.trim() })
+              }
+            />
+            <TextField
+              label="发布账号"
+              value={draft.account.displayName}
+              onChange={(value) => onUpdateAccount({ displayName: value })}
+            />
+            <label className="grid gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                账号授权状态
+              </span>
+              <select
+                value={draft.account.authorized ? "yes" : "no"}
+                onChange={(event) =>
+                  onUpdateAccount({ authorized: event.target.value === "yes" })
+                }
+                className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+              >
+                <option value="yes">已由用户授权</option>
+                <option value="no">未授权</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              简介
+            </span>
+            <textarea
+              value={draft.intro}
+              onChange={(event) => onUpdateDraft({ intro: event.target.value })}
+              className="min-h-24 rounded-lg border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+            />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={onConfirmPublish}>
+              {autoPublishEnabled ? (
+                <UploadCloud className="size-4" />
+              ) : (
+                <Lock className="size-4" />
+              )}
+              确认并准备发布
+            </Button>
+            <Button variant="outline" onClick={onRiskPause}>
+              <AlertTriangle className="size-4" />
+              记录风控暂停
+            </Button>
+            <StatusBadge status={draft.status} />
+          </div>
+
+          {draft.pauseReason || draft.reason ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              {draft.pauseReason || draft.reason}
+            </div>
+          ) : null}
+
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <div className="mb-2 text-xs font-medium text-muted-foreground">
+              发布记录
+            </div>
+            <div className="grid gap-2">
+              {draft.publishLog.slice(-5).map((entry) => (
+                <div
+                  key={`${entry.at}-${entry.kind}-${entry.message}`}
+                  className="grid grid-cols-[120px_120px_minmax(0,1fr)] gap-2 text-xs max-md:grid-cols-1"
+                >
+                  <span className="font-mono text-muted-foreground">
+                    {entry.at.slice(0, 19).replace("T", " ")}
+                  </span>
+                  <span>{entry.kind}</span>
+                  <span className="min-w-0">{entry.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="grid gap-2">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+      />
+    </label>
+  )
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <span className="inline-flex min-h-8 items-center rounded-lg border bg-muted px-2.5 text-xs text-muted-foreground">
+      状态：{status}
+    </span>
   )
 }
