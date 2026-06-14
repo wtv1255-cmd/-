@@ -39,6 +39,11 @@ import {
   type VideoTask,
   type VideoWorkflowStepState,
 } from "@/lib/video-task"
+import {
+  createTaskFileRef,
+  createVideoTaskSnapshot,
+  saveVideoTaskSnapshot,
+} from "@/lib/video-domain"
 
 const defaultPublishAccount: PublishAccount = {
   id: "douyin-main",
@@ -103,6 +108,33 @@ function VideoFactoryShell() {
     const task = createVideoTask({
       title: `她火视频任务 ${String(tasks.length + 1).padStart(2, "0")}`,
     })
+    saveVideoTaskSnapshot(
+      createVideoTaskSnapshot({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        workflow: task.workflow,
+        source: {
+          mode: "manual_text",
+          userTopic: "等待输入关键词、抖音链接或本地视频",
+        },
+        assets: [
+          {
+            id: "render_placeholder",
+            kind: "rendered_video",
+            displayName: "rendered-video-placeholder.mp4",
+            file: createTaskFileRef({
+              taskId: task.id,
+              kind: "rendered_video",
+              filename: "rendered-video-placeholder.mp4",
+              mimeType: "video/mp4",
+            }),
+          },
+        ],
+      })
+    )
     persistTasks([task, ...tasks], task.id)
     setToast("已创建视频任务")
   }

@@ -27,6 +27,7 @@ export type VideoTask = {
   createdAt: string
   updatedAt: string
   workflow: VideoWorkflowStep[]
+  snapshotKey?: string
 }
 
 export type CreateVideoTaskInput = {
@@ -111,6 +112,7 @@ export function createVideoTask(input: CreateVideoTaskInput = {}): VideoTask {
     createdAt: at,
     updatedAt: at,
     workflow: createWorkflow(),
+    snapshotKey: `snapshot:${`video_${at.replace(/[-:.TZ]/g, "")}`}`,
   }
 }
 
@@ -126,6 +128,7 @@ export function sanitizeVideoTask(task: VideoTask): VideoTask {
         : "draft",
     createdAt: task.createdAt || nowIso(),
     updatedAt: task.updatedAt || task.createdAt || nowIso(),
+    snapshotKey: task.snapshotKey || `snapshot:${task.id}`,
     workflow:
       Array.isArray(task.workflow) && task.workflow.length === 9
         ? task.workflow.map((step, index) => ({
