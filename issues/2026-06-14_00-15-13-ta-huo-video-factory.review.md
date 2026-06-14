@@ -1,0 +1,14 @@
+## REVIEW-01
+- Source doc: docs/superpowers/specs/2026-06-14-ta-huo-video-factory-design.md
+- Review agent: fallback independent-context
+- Scope checked: Stage 1 video factory acceptance list, UI/page flow, task persistence, API profile safety, licensing gates, publishing controls, media storage, renderer/export claims.
+- Evidence checked: CSV states for SPEC-01..SPEC-11, commits b9991d..28807fd, node test evidence, typecheck/build/lint evidence, Browser authorization-gate evidence, FFmpeg availability evidence, notes for limited provider/Douyin/TTS validations.
+- Claim/evidence alignment: mismatches found
+- Limited validation honestly reported: yes
+- Result: gaps_found
+- Gaps:
+  - The approved design requires at least one engine to export a real MP4, but SPEC-10 currently creates a renderer export plan, task-scoped output reference, and FFmpeg command string only. There is no Electron IPC or UI action that executes FFmpeg and verifies an actual MP4 file exists.
+- Follow-up issues added: FOLLOWUP-01, REVIEW-02
+- Assumptions: Browser post-activation UI remains limited without a valid signed local license; external Douyin/TTS/provider validations remain credential-bound and are recorded as limited evidence.
+- Decision debt: Need a constrained desktop render IPC rather than broad filesystem/process access from the web UI.
+- Human-required blockers: none
