@@ -11,6 +11,7 @@ import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { createVideoRendererIpcHandler } from "./video-renderer.mjs"
 
 const PREFERRED_FRONTEND_PORT = 48218
 const FRONTEND_PORT_CANDIDATES = [48218, 48219, 48220, 48221, 48222]
@@ -105,7 +106,11 @@ function sanitizeDownloadFilename(value) {
 
 function getDownloadFilters(filename, mimeType) {
   const extension = path.extname(filename).replace(".", "").toLowerCase()
-  if (mimeType === "image/jpeg" || extension === "jpg" || extension === "jpeg") {
+  if (
+    mimeType === "image/jpeg" ||
+    extension === "jpg" ||
+    extension === "jpeg"
+  ) {
     return [{ name: "JPEG 图片文件", extensions: ["jpg", "jpeg"] }]
   }
   if (mimeType === "image/webp" || extension === "webp") {
@@ -174,6 +179,11 @@ ipcMain.handle("ta-huo:save-file-to-downloads", async (_event, input) => {
     }
   }
 })
+
+ipcMain.handle(
+  "ta-huo:render-video-with-ffmpeg",
+  createVideoRendererIpcHandler(app.getPath("userData"))
+)
 
 function logStartup(message) {
   try {

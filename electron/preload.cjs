@@ -10,4 +10,7 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   saveFileToDownloads(input) {
     return ipcRenderer.invoke("ta-huo:save-file-to-downloads", input)
   },
+  renderVideoWithFfmpeg(input) {
+    return ipcRenderer.invoke("ta-huo:render-video-with-ffmpeg", input)
+  },
 })

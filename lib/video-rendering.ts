@@ -21,6 +21,7 @@ export type CreateRenderEngineOptionsInput = {
 
 export type RenderExportPlanStatus =
   | "ready"
+  | "exported"
   | "fallback_ready"
   | "blocked_no_timeline"
   | "blocked_no_engine"

@@ -674,7 +674,7 @@ function VideoFactoryShell() {
     setToast("已生成配音、字幕和统一时间线")
   }
 
-  const prepareRenderExport = () => {
+  const prepareRenderExport = async () => {
     if (!activeTask || !videoTimeline) {
       setToast("请先生成统一时间线")
       return
@@ -686,16 +686,55 @@ function VideoFactoryShell() {
       requestedEngineId: requestedRenderEngine,
       engines: renderEngines,
     })
-    setRenderPlan(plan)
-
-    const isUsablePlan =
-      plan.status === "ready" || plan.status === "fallback_ready"
     const withoutPreviousRenderPlan = (assets: VideoAsset[]) =>
       assets.filter((asset) => !asset.tags?.includes("render_export_plan"))
+    const desktopRenderer = window.promptCenterDesktop?.renderVideoWithFfmpeg
+    const canUseBuiltInExport =
+      plan.engineId === "ffmpeg" &&
+      (plan.status === "ready" || plan.status === "fallback_ready") &&
+      Boolean(desktopRenderer)
+    const renderResult = canUseBuiltInExport
+      ? await desktopRenderer?.({
+          taskId: activeTask.id,
+          timeline: videoTimeline,
+          outputFilename: plan.output.file.filename,
+        })
+      : null
+    const renderedOutput =
+      renderResult?.ok && renderResult.filePath
+        ? {
+            ...plan.output,
+            file: {
+              ...plan.output.file,
+              filename: renderResult.filename || plan.output.file.filename,
+              path: renderResult.filePath,
+              bytes: renderResult.bytes || 0,
+              mimeType: renderResult.mimeType || "video/mp4",
+            },
+          }
+        : plan.output
+    const nextPlan: RenderExportPlan = {
+      ...plan,
+      output: renderedOutput,
+      previewPath: renderedOutput.file.path,
+      status: renderResult?.ok ? "exported" : plan.status,
+      message: renderResult?.ok
+        ? `FFmpeg 已导出真实 MP4：${renderedOutput.file.filename}`
+        : renderResult?.error
+          ? `FFmpeg 导出失败：${renderResult.error}`
+          : desktopRenderer
+            ? plan.message
+            : `${plan.message} 当前浏览器环境仅生成导出计划，桌面端会执行 FFmpeg。`,
+    }
+    const isUsablePlan =
+      nextPlan.status === "ready" ||
+      nextPlan.status === "fallback_ready" ||
+      nextPlan.status === "exported"
+    setRenderPlan(nextPlan)
 
     if (isUsablePlan) {
       setVideoAssets((current) => [
-        plan.output,
+        nextPlan.output,
         ...withoutPreviousRenderPlan(current),
       ])
     }
@@ -703,7 +742,7 @@ function VideoFactoryShell() {
     updateActiveTaskSnapshot((snapshot) => ({
       ...snapshot,
       assets: isUsablePlan
-        ? [plan.output, ...withoutPreviousRenderPlan(snapshot.assets)]
+        ? [nextPlan.output, ...withoutPreviousRenderPlan(snapshot.assets)]
         : snapshot.assets,
       records: [
         ...snapshot.records,
@@ -711,11 +750,17 @@ function VideoFactoryShell() {
           id: `render_${Date.now()}`,
           at: new Date().toISOString(),
           kind: "render_export_plan",
-          message: `${plan.message} 输出引用：${plan.previewPath}`,
+          message: `${nextPlan.message} 输出引用：${nextPlan.previewPath}`,
         },
       ],
     }))
-    setToast(isUsablePlan ? "已生成导出计划和预览路径" : "当前没有可用渲染引擎")
+    setToast(
+      renderResult?.ok
+        ? "已导出真实 MP4"
+        : isUsablePlan
+          ? "已生成导出计划和预览路径"
+          : "当前没有可用渲染引擎"
+    )
   }
 
   const persistDraft = (draft: PublishDraft) => {

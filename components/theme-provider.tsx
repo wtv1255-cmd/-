@@ -18,6 +18,19 @@ declare global {
         directory?: string
         error?: string
       }>
+      renderVideoWithFfmpeg?: (input: {
+        taskId: string
+        timeline: unknown
+        outputFilename: string
+      }) => Promise<{
+        ok: boolean
+        taskId?: string
+        filename?: string
+        filePath?: string
+        bytes?: number
+        mimeType?: string
+        error?: string
+      }>
     }
   }
 }
