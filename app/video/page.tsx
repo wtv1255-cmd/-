@@ -8,6 +8,7 @@ import {
   Layers3,
   ListChecks,
   Lock,
+  Settings,
   RadioTower,
   Save,
   Sparkles,
@@ -44,6 +45,19 @@ import {
   createVideoTaskSnapshot,
   saveVideoTaskSnapshot,
 } from "@/lib/video-domain"
+import {
+  API_PROFILE_SERVICES,
+  createApiProfileLogEntry,
+  createDefaultApiProfileStore,
+  readApiProfileStore,
+  resolveApiProfile,
+  saveApiProfileStore,
+  setActiveApiProfile,
+  upsertApiProfile,
+  type ApiProfile,
+  type ApiProfileService,
+  type ApiProfileStore,
+} from "@/lib/api-profiles"
 
 const defaultPublishAccount: PublishAccount = {
   id: "douyin-main",
@@ -51,6 +65,13 @@ const defaultPublishAccount: PublishAccount = {
   platform: "douyin",
   browserProfileId: "work",
   authorized: true,
+}
+
+const apiProfileServiceLabels: Record<ApiProfileService, string> = {
+  text_model: "文本模型",
+  image_generation: "图片生成",
+  video_parsing: "视频解析",
+  publish_helper: "发布辅助",
 }
 
 export default function VideoFactoryPage() {
@@ -65,6 +86,9 @@ function VideoFactoryShell() {
   const license = useLicenseVerification()
   const [tasks, setTasks] = useState<VideoTask[]>([])
   const [activeTaskId, setActiveTaskId] = useState("")
+  const [apiProfiles, setApiProfiles] = useState<ApiProfileStore>(
+    createDefaultApiProfileStore
+  )
   const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null)
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
@@ -79,10 +103,12 @@ function VideoFactoryShell() {
         const restoredTasks = readVideoTasks()
         setTasks(restoredTasks)
         setActiveTaskId(restoredTasks[0]?.id || "")
+        setApiProfiles(readApiProfileStore())
       } catch {
         setPublishDraft(null)
         setTasks([])
         setActiveTaskId("")
+        setApiProfiles(createDefaultApiProfileStore())
       }
     })
     return () => {
@@ -104,10 +130,40 @@ function VideoFactoryShell() {
     }
   }
 
+  const persistApiProfiles = (store: ApiProfileStore) => {
+    setApiProfiles(store)
+    saveApiProfileStore(store)
+  }
+
+  const saveApiProfile = (profile: ApiProfile) => {
+    persistApiProfiles(upsertApiProfile(apiProfiles, profile))
+    setToast("API Profile 已保存")
+  }
+
+  const selectApiProfile = (
+    service: ApiProfileService,
+    profileId: string
+  ) => {
+    persistApiProfiles(setActiveApiProfile(apiProfiles, service, profileId))
+  }
+
   const createTask = () => {
     const task = createVideoTask({
       title: `她火视频任务 ${String(tasks.length + 1).padStart(2, "0")}`,
     })
+    const profileRecords = API_PROFILE_SERVICES.map((service, index) => {
+      const entry = createApiProfileLogEntry(apiProfiles, service)
+
+      return {
+        id: `api_profile_${service}`,
+        at: new Date(Date.now() + index).toISOString(),
+        kind: "api_profile_selected" as const,
+        message: `${apiProfileServiceLabels[service]}：${entry.label}（${
+          entry.configured ? "已配置" : "未配置"
+        }）`,
+      }
+    })
+
     saveVideoTaskSnapshot(
       createVideoTaskSnapshot({
         id: task.id,
@@ -120,6 +176,7 @@ function VideoFactoryShell() {
           mode: "manual_text",
           userTopic: "等待输入关键词、抖音链接或本地视频",
         },
+        records: profileRecords,
         assets: [
           {
             id: "render_placeholder",
@@ -133,6 +190,16 @@ function VideoFactoryShell() {
             }),
           },
         ],
+        publish: {
+          platform: "douyin",
+          accountId: defaultPublishAccount.id,
+          displayName: defaultPublishAccount.displayName,
+          browserProfileId: defaultPublishAccount.browserProfileId,
+          authorizedByUser: defaultPublishAccount.authorized,
+          title: "等待生成发布标题",
+          topics: [],
+          intro: "",
+        },
       })
     )
     persistTasks([task, ...tasks], task.id)
@@ -272,6 +339,12 @@ function VideoFactoryShell() {
               onUpdateAccount={updateAccount}
               onConfirmPublish={confirmPublish}
               onRiskPause={simulateRiskPause}
+            />
+
+            <ApiProfilesPanel
+              store={apiProfiles}
+              onSaveProfile={saveApiProfile}
+              onSelectProfile={selectApiProfile}
             />
           </div>
 
@@ -608,6 +681,169 @@ function PublishPanel({
         </div>
       )}
     </section>
+  )
+}
+
+function ApiProfilesPanel({
+  store,
+  onSaveProfile,
+  onSelectProfile,
+}: {
+  store: ApiProfileStore
+  onSaveProfile: (profile: ApiProfile) => void
+  onSelectProfile: (service: ApiProfileService, profileId: string) => void
+}) {
+  const [editingService, setEditingService] =
+    useState<ApiProfileService>("text_model")
+  const activeProfile = resolveApiProfile(store, editingService)
+
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">API Profile</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            文本、图片、视频解析和发布辅助分别选择本机保存的用户 API。Key
+            只用于请求，不写入任务日志或导出摘要。
+          </p>
+        </div>
+        <Settings className="size-5 text-muted-foreground" />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <div className="grid content-start gap-2">
+          {API_PROFILE_SERVICES.map((service) => {
+            const profile = resolveApiProfile(store, service)
+            const active = service === editingService
+            return (
+              <button
+                key={service}
+                type="button"
+                className={`rounded-lg border px-3 py-2 text-left transition ${
+                  active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "bg-muted/30 hover:bg-muted"
+                }`}
+                onClick={() => setEditingService(service)}
+              >
+                <div className="flex items-center justify-between gap-2 text-sm font-medium">
+                  <span>{apiProfileServiceLabels[service]}</span>
+                  <span className="text-[11px] opacity-75">
+                    {profile.apiKey.trim() ? "已配置" : "未配置"}
+                  </span>
+                </div>
+                <div className="mt-1 truncate text-xs opacity-80">
+                  {profile.label}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        <ApiProfileEditor
+          key={`${editingService}:${activeProfile.id}`}
+          activeProfile={activeProfile}
+          editingService={editingService}
+          store={store}
+          onSaveProfile={onSaveProfile}
+          onSelectProfile={onSelectProfile}
+        />
+      </div>
+    </section>
+  )
+}
+
+function ApiProfileEditor({
+  activeProfile,
+  editingService,
+  store,
+  onSaveProfile,
+  onSelectProfile,
+}: {
+  activeProfile: ApiProfile
+  editingService: ApiProfileService
+  store: ApiProfileStore
+  onSaveProfile: (profile: ApiProfile) => void
+  onSelectProfile: (service: ApiProfileService, profileId: string) => void
+}) {
+  const [draft, setDraft] = useState<ApiProfile>(activeProfile)
+
+  const saveDraft = () => {
+    onSaveProfile({
+      ...draft,
+      service: editingService,
+      id: draft.id.trim() || `${editingService}-custom`,
+      label: draft.label.trim() || apiProfileServiceLabels[editingService],
+      apiBaseUrl: draft.apiBaseUrl.trim(),
+      apiKey: draft.apiKey.trim(),
+    })
+  }
+
+  return (
+    <div className="grid gap-3 rounded-lg border bg-muted/30 p-4">
+      <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+        <TextField
+          label="Profile ID"
+          value={draft.id}
+          onChange={(value) => setDraft((current) => ({ ...current, id: value }))}
+        />
+        <TextField
+          label="显示名称"
+          value={draft.label}
+          onChange={(value) =>
+            setDraft((current) => ({ ...current, label: value }))
+          }
+        />
+        <TextField
+          label="API 地址"
+          value={draft.apiBaseUrl}
+          onChange={(value) =>
+            setDraft((current) => ({ ...current, apiBaseUrl: value }))
+          }
+        />
+        <label className="grid gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            API Key
+          </span>
+          <input
+            value={draft.apiKey}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                apiKey: event.target.value,
+              }))
+            }
+            className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+            type="password"
+            placeholder="sk-..."
+          />
+        </label>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={saveDraft}>
+          <Save className="size-4" />
+          保存 Profile
+        </Button>
+        <select
+          value={store.activeProfileByService[editingService]}
+          onChange={(event) =>
+            onSelectProfile(editingService, event.target.value)
+          }
+          className="h-9 min-w-56 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+          aria-label={`${apiProfileServiceLabels[editingService]} Profile`}
+        >
+          {store.profiles[editingService].map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.label}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-muted-foreground">
+          当前请求会使用所选 Profile 的地址和 Key。
+        </span>
+      </div>
+    </div>
   )
 }
 
