@@ -1,0 +1,229 @@
+import type { ApiProfileRequestContext } from "@/lib/api-profiles"
+import type { VideoDurationPreset, VideoPackageId } from "@/lib/video-domain"
+
+export type ViralStructureSection = {
+  id: string
+  label: string
+  summary: string
+}
+
+export type ViralStructureSummary = {
+  hook: string
+  painPoint: string
+  proof: string
+  conversion: string
+  rhythm: string
+  reusableElements: string[]
+  sections: ViralStructureSection[]
+}
+
+export type VideoAnalysisDraftStatus = "ready_for_edit" | "needs_manual_edit"
+
+export type VideoAnalysisDraft = {
+  status: VideoAnalysisDraftStatus
+  editable: boolean
+  sourceText: string
+  structureSummary: ViralStructureSummary
+  sentenceTimeline: Array<{
+    id: string
+    startMs: number
+    endMs: number
+    text: string
+  }>
+  originalScript: string
+  failureReason?: string
+}
+
+export type CreateManualVideoAnalysisDraftInput = {
+  topic: string
+  packageId: VideoPackageId
+  durationPreset: VideoDurationPreset
+}
+
+export type ScriptGenerationRequest = {
+  model: string
+  messages: Array<{ role: "system" | "user"; content: string }>
+  temperature: number
+  apiBaseUrl: string
+  apiKey: string
+  profileId: string
+}
+
+export type BuildScriptGenerationRequestInput = {
+  profile: ApiProfileRequestContext
+  sourceText: string
+  durationPreset: VideoDurationPreset
+  packageId: VideoPackageId
+  model?: string
+}
+
+export type ScriptGenerationLogEntry = {
+  kind: "script_generation_request"
+  profileId: string
+  apiBaseUrl: string
+  model: string
+  sourceLength: number
+  apiKey?: never
+}
+
+export type CreateScriptGenerationFailureDraftInput = {
+  sourceText: string
+  reason: string
+}
+
+const structureLabels = [
+  ["hook", "开头钩子"],
+  ["pain", "痛点放大"],
+  ["demo", "演示过程"],
+  ["proof", "结果证明"],
+  ["conversion", "转化口播"],
+  ["close", "结尾行动"],
+] as const
+
+function cleanText(value: unknown, fallback = "") {
+  const text =
+    typeof value === "string" ? value.replace(/\s+/g, " ").trim() : ""
+  return text || fallback
+}
+
+function packageLabel(packageId: VideoPackageId) {
+  const labels: Record<VideoPackageId, string> = {
+    stickman_meme: "火柴人爆梗",
+    tool_showcase: "工具演示",
+    cinematic_showcase: "产品大片",
+  }
+  return labels[packageId] || labels.stickman_meme
+}
+
+function buildStructureSummary(sourceText: string): ViralStructureSummary {
+  const text = cleanText(sourceText, "用户提供主题")
+  return {
+    hook: `用「${text}」在前三秒抛出明确收益或冲突。`,
+    painPoint: "先说目标用户的低效、成本或错失机会，再给出可视化对比。",
+    proof: "用前后对比、步骤拆解和结果画面证明方案有效。",
+    conversion: "结尾给出轻量行动指令，引导收藏、评论或试用。",
+    rhythm: "3 秒钩子，15 秒痛点和演示，20 秒证明，末尾转化。",
+    reusableElements: ["三秒收益钩子", "前后对比", "步骤清单", "结果证明", "行动口播"],
+    sections: structureLabels.map(([id, label], index) => ({
+      id,
+      label,
+      summary: `${label}：围绕「${text}」生成第 ${index + 1} 段结构。`,
+    })),
+  }
+}
+
+function buildOriginalScript(
+  sourceText: string,
+  packageId: VideoPackageId,
+  durationPreset: VideoDurationPreset
+) {
+  const text = cleanText(sourceText, "用户提供主题")
+  return [
+    `【原创脚本 · ${packageLabel(packageId)} · ${durationPreset}】`,
+    `开头：如果你还在手动处理「${text}」，先停一下。`,
+    "痛点：同样的素材，别人已经用结构化流程做出连续爆款。",
+    "演示：第一步拆钩子，第二步改成自己的案例，第三步补上结果对比。",
+    "证明：把原来的搬运冲动变成原创表达，节奏保留，内容重写。",
+    "转化：收藏这套流程，下次直接按这个结构生成脚本和分镜。",
+  ].join("\n")
+}
+
+function buildSentenceTimeline(script: string) {
+  return script
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8)
+    .map((text, index) => ({
+      id: `sentence_${String(index + 1).padStart(2, "0")}`,
+      startMs: index * 7000,
+      endMs: (index + 1) * 7000,
+      text,
+    }))
+}
+
+export function createManualVideoAnalysisDraft({
+  topic,
+  packageId,
+  durationPreset,
+}: CreateManualVideoAnalysisDraftInput): VideoAnalysisDraft {
+  const sourceText = cleanText(topic, "用户手动输入主题")
+  const originalScript = buildOriginalScript(sourceText, packageId, durationPreset)
+  return {
+    status: "ready_for_edit",
+    editable: true,
+    sourceText,
+    structureSummary: buildStructureSummary(sourceText),
+    sentenceTimeline: buildSentenceTimeline(originalScript),
+    originalScript,
+  }
+}
+
+export function buildScriptGenerationRequest({
+  profile,
+  sourceText,
+  durationPreset,
+  packageId,
+  model = "gpt-5.5",
+}: BuildScriptGenerationRequestInput): ScriptGenerationRequest {
+  const cleanedSource = cleanText(sourceText, "无转写内容，按用户主题生成")
+  return {
+    model,
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是她火视频工厂的脚本分析助手，只做结构分析和原创改写，不能搬运原视频画面或原文案。",
+      },
+      {
+        role: "user",
+        content: [
+          "请基于以下来源生成原创短视频脚本。",
+          `套餐：${packageLabel(packageId)}`,
+          `目标时长：${durationPreset}`,
+          "输出：爆款结构摘要、可复用钩子、原创完整脚本。",
+          `来源内容：${cleanedSource}`,
+        ].join("\n"),
+      },
+    ],
+    temperature: 0.35,
+    apiBaseUrl: profile.apiBaseUrl,
+    apiKey: profile.apiKey,
+    profileId: profile.profileId,
+  }
+}
+
+export function createScriptGenerationLogEntry(
+  request: ScriptGenerationRequest
+): ScriptGenerationLogEntry {
+  const sourceMessage = request.messages.find((message) => message.role === "user")
+  return {
+    kind: "script_generation_request",
+    profileId: request.profileId,
+    apiBaseUrl: request.apiBaseUrl,
+    model: request.model,
+    sourceLength: sourceMessage?.content.length || 0,
+  }
+}
+
+export function createScriptGenerationFailureDraft({
+  sourceText,
+  reason,
+}: CreateScriptGenerationFailureDraftInput): VideoAnalysisDraft {
+  const cleanedSource = cleanText(sourceText, "没有可用转写，用户可手动输入脚本。")
+  const originalScript = [
+    "【手动编辑脚本】",
+    cleanedSource,
+    "",
+    "模型生成暂不可用，请在这里补齐开头钩子、痛点、演示、证明和转化口播。",
+  ].join("\n")
+  return {
+    status: "needs_manual_edit",
+    editable: true,
+    sourceText: cleanedSource,
+    structureSummary: buildStructureSummary(cleanedSource),
+    sentenceTimeline: buildSentenceTimeline(originalScript),
+    originalScript,
+    failureReason: cleanText(reason, "模型请求失败"),
+  }
+}

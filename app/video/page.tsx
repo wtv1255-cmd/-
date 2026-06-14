@@ -50,6 +50,7 @@ import {
 } from "@/lib/video-domain"
 import {
   API_PROFILE_SERVICES,
+  buildApiProfileRequestContext,
   createApiProfileLogEntry,
   createDefaultApiProfileStore,
   readApiProfileStore,
@@ -61,6 +62,13 @@ import {
   type ApiProfileService,
   type ApiProfileStore,
 } from "@/lib/api-profiles"
+import {
+  buildScriptGenerationRequest,
+  createManualVideoAnalysisDraft,
+  createScriptGenerationFailureDraft,
+  createScriptGenerationLogEntry,
+  type VideoAnalysisDraft,
+} from "@/lib/video-analysis"
 import {
   collectViralSourceCandidates,
   createDouyinLinkSourceCandidate,
@@ -115,6 +123,11 @@ function VideoFactoryShell() {
   const [isCollectingSources, setIsCollectingSources] = useState(false)
   const [manualDouyinUrl, setManualDouyinUrl] = useState("")
   const [localUploadName, setLocalUploadName] = useState("")
+  const [analysisTopic, setAnalysisTopic] =
+    useState("AI 工具帮普通人一键生成短视频")
+  const [analysisDraft, setAnalysisDraft] = useState<VideoAnalysisDraft | null>(
+    null
+  )
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -320,6 +333,7 @@ function VideoFactoryShell() {
         },
       ],
     }))
+    setAnalysisTopic(candidate.title)
     setToast("已写入爆款来源")
   }
 
@@ -342,6 +356,45 @@ function VideoFactoryShell() {
     setSourceCandidates((current) => [candidate, ...current])
     selectSourceCandidate(candidate)
     setLocalUploadName("")
+  }
+
+  const generateAnalysisDraft = () => {
+    const request = buildScriptGenerationRequest({
+      profile: buildApiProfileRequestContext(apiProfiles, "text_model"),
+      sourceText: analysisTopic,
+      durationPreset: "45-60s",
+      packageId: "stickman_meme",
+    })
+    const logEntry = createScriptGenerationLogEntry(request)
+    const draft = request.apiKey
+      ? createManualVideoAnalysisDraft({
+          topic: analysisTopic,
+          packageId: "stickman_meme",
+          durationPreset: "45-60s",
+        })
+      : createScriptGenerationFailureDraft({
+          sourceText: analysisTopic,
+          reason: "文本模型 Profile 尚未配置 API Key，已切换到手动编辑。",
+        })
+
+    setAnalysisDraft(draft)
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      voice: {
+        ...snapshot.voice,
+        text: draft.originalScript,
+      },
+      records: [
+        ...snapshot.records,
+        {
+          id: `script_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "script_analysis",
+          message: `脚本分析：${draft.status} · ${logEntry.profileId} · ${logEntry.sourceLength} 字符`,
+        },
+      ],
+    }))
+    setToast("已生成可编辑脚本草稿")
   }
 
   const persistDraft = (draft: PublishDraft) => {
@@ -485,6 +538,18 @@ function VideoFactoryShell() {
               onImportDouyinLink={importDouyinLink}
               onLocalUploadNameChange={setLocalUploadName}
               onImportLocalUpload={importLocalUpload}
+            />
+
+            <ScriptAnalysisPanel
+              topic={analysisTopic}
+              draft={analysisDraft}
+              onTopicChange={setAnalysisTopic}
+              onGenerateDraft={generateAnalysisDraft}
+              onScriptChange={(value) =>
+                setAnalysisDraft((current) =>
+                  current ? { ...current, originalScript: value } : current
+                )
+              }
             />
 
             <PublishPanel
@@ -835,6 +900,125 @@ function SourceCollectionPanel({
             </div>
           )}
         </div>
+      </div>
+    </section>
+  )
+}
+
+function ScriptAnalysisPanel({
+  topic,
+  draft,
+  onTopicChange,
+  onGenerateDraft,
+  onScriptChange,
+}: {
+  topic: string
+  draft: VideoAnalysisDraft | null
+  onTopicChange: (value: string) => void
+  onGenerateDraft: () => void
+  onScriptChange: (value: string) => void
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">视频解析和原创脚本</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            来源视频或手动主题只用于结构分析，输出可编辑原创脚本；模型不可用时仍可手动继续。
+          </p>
+        </div>
+        <ListChecks className="size-5 text-muted-foreground" />
+      </div>
+
+      <div className="grid gap-4">
+        <label className="grid gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            来源转写或手动主题
+          </span>
+          <textarea
+            value={topic}
+            onChange={(event) => onTopicChange(event.target.value)}
+            className="min-h-24 rounded-lg border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+          />
+        </label>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={onGenerateDraft}>
+            <Sparkles className="size-4" />
+            生成结构和脚本
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            使用当前文本模型 Profile；失败会保留手动编辑入口。
+          </span>
+        </div>
+
+        {draft ? (
+          <div className="grid gap-4">
+            <div className="grid grid-cols-2 gap-3 max-lg:grid-cols-1">
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
+                  结构摘要
+                </div>
+                <div className="grid gap-2 text-sm leading-6">
+                  <p>{draft.structureSummary.hook}</p>
+                  <p>{draft.structureSummary.rhythm}</p>
+                  <p>{draft.structureSummary.conversion}</p>
+                </div>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
+                  句子级时间轴
+                </div>
+                <div className="grid gap-2 text-xs text-muted-foreground">
+                  {draft.sentenceTimeline.slice(0, 4).map((cue) => (
+                    <div
+                      key={cue.id}
+                      className="grid grid-cols-[88px_minmax(0,1fr)] gap-2"
+                    >
+                      <span className="font-mono">
+                        {Math.round(cue.startMs / 1000)}-
+                        {Math.round(cue.endMs / 1000)}s
+                      </span>
+                      <span className="truncate">{cue.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {draft.structureSummary.reusableElements.map((item) => (
+                <span
+                  key={item}
+                  className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
+                >
+                  {item}
+                </span>
+              ))}
+            </div>
+
+            {draft.failureReason ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                {draft.failureReason}
+              </div>
+            ) : null}
+
+            <label className="grid gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                原创完整脚本
+              </span>
+              <textarea
+                value={draft.originalScript}
+                onChange={(event) => onScriptChange(event.target.value)}
+                className="min-h-56 rounded-lg border bg-background p-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring/20"
+              />
+            </label>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+            等待来源解析。没有转写时可以直接输入主题生成可编辑脚本。
+          </div>
+        )}
       </div>
     </section>
   )
