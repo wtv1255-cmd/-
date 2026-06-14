@@ -52,7 +52,9 @@ import {
   type VideoAssetKind,
   type VideoDurationPreset,
   type VideoPackageId,
+  type VideoTimeline,
   type VideoTaskSnapshot,
+  type VoicePlan,
 } from "@/lib/video-domain"
 import {
   API_PROFILE_SERVICES,
@@ -87,6 +89,10 @@ import {
   VIDEO_PACKAGE_OPTIONS,
   createStoryboardFromScript,
 } from "@/lib/video-storyboard"
+import {
+  createUnifiedVideoTimeline,
+  createVoicePlanFromScript,
+} from "@/lib/video-timeline"
 import {
   collectViralSourceCandidates,
   createDouyinLinkSourceCandidate,
@@ -156,6 +162,8 @@ function VideoFactoryShell() {
     useState<VideoAssetKind>("yanling_clip")
   const [assetImportName, setAssetImportName] = useState("")
   const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([])
+  const [voicePlan, setVoicePlan] = useState<VoicePlan | null>(null)
+  const [videoTimeline, setVideoTimeline] = useState<VideoTimeline | null>(null)
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -188,6 +196,30 @@ function VideoFactoryShell() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  useEffect(() => {
+    let alive = true
+    Promise.resolve().then(() => {
+      if (!alive) return
+      if (!activeTask?.id) {
+        setStoryboardShots([])
+        setVideoAssets([])
+        setVoicePlan(null)
+        setVideoTimeline(null)
+        return
+      }
+      const snapshot = readVideoTaskSnapshot(activeTask.id)
+      setStoryboardShots(snapshot?.storyboard || [])
+      setVideoAssets(snapshot?.assets || [])
+      setVoicePlan(snapshot?.voice.subtitles.length ? snapshot.voice : null)
+      setVideoTimeline(
+        snapshot?.timeline.tracks.length ? snapshot.timeline : null
+      )
+    })
+    return () => {
+      alive = false
+    }
+  }, [activeTask?.id])
+
   const persistTasks = (nextTasks: VideoTask[], nextActiveId?: string) => {
     setTasks(nextTasks)
     saveVideoTasks(nextTasks)
@@ -206,10 +238,7 @@ function VideoFactoryShell() {
     setToast("API Profile 已保存")
   }
 
-  const selectApiProfile = (
-    service: ApiProfileService,
-    profileId: string
-  ) => {
+  const selectApiProfile = (service: ApiProfileService, profileId: string) => {
     persistApiProfiles(setActiveApiProfile(apiProfiles, service, profileId))
   }
 
@@ -465,9 +494,7 @@ function VideoFactoryShell() {
     patch: Partial<StoryboardShot>
   ) => {
     setStoryboardShots((current) =>
-      current.map((shot) =>
-        shot.id === shotId ? { ...shot, ...patch } : shot
-      )
+      current.map((shot) => (shot.id === shotId ? { ...shot, ...patch } : shot))
     )
     updateActiveTaskSnapshot((snapshot) => ({
       ...snapshot,
@@ -547,6 +574,66 @@ function VideoFactoryShell() {
       assets: removeVideoAssetById(snapshot.assets, assetId),
     }))
     setToast("已移除任务素材记录")
+  }
+
+  const assembleTimeline = () => {
+    if (!activeTask || !analysisDraft) {
+      setToast("请先创建任务并生成脚本")
+      return
+    }
+    if (!storyboardShots.length) {
+      setToast("请先生成分镜")
+      return
+    }
+
+    const voice = createVoicePlanFromScript({
+      taskId: activeTask.id,
+      script: analysisDraft.originalScript,
+      durationPreset: selectedDuration,
+      audioFilename: "voice.wav",
+    })
+    const visualAssets = videoAssets.filter((asset) =>
+      ["stickman_image", "yanling_clip", "showcase_clip"].includes(asset.kind)
+    )
+    const storyboard = storyboardShots.map((shot, index) => ({
+      id: shot.id,
+      startMs: shot.startMs,
+      endMs: shot.endMs,
+      assetIds:
+        shot.assetIds.length > 0
+          ? shot.assetIds
+          : [
+              visualAssets[index % Math.max(visualAssets.length, 1)]?.id ||
+                shot.id,
+            ],
+    }))
+    const timeline = createUnifiedVideoTimeline({
+      taskId: activeTask.id,
+      voice,
+      storyboard,
+      bgmAssetId: videoAssets.find((asset) => asset.kind === "bgm")?.id,
+      sfxAssetIds: videoAssets
+        .filter((asset) => asset.kind === "sfx")
+        .map((asset) => asset.id),
+    })
+
+    setVoicePlan(voice)
+    setVideoTimeline(timeline)
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      voice,
+      timeline,
+      records: [
+        ...snapshot.records,
+        {
+          id: `timeline_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "timeline_assembled",
+          message: `时间线已装配：${timeline.durationMs}ms · ${timeline.tracks.length} tracks · TTS timestamps 缺失时使用句子级 fallback timing`,
+        },
+      ],
+    }))
+    setToast("已生成配音、字幕和统一时间线")
   }
 
   const persistDraft = (draft: PublishDraft) => {
@@ -644,35 +731,35 @@ function VideoFactoryShell() {
         <section className="grid grid-cols-[minmax(0,1fr)_340px] gap-5 max-xl:grid-cols-1">
           <div className="grid gap-5">
             <div className="rounded-lg border bg-background p-5">
-            <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h1 className="text-2xl font-semibold tracking-normal">
-                  视频工厂任务
-                </h1>
-                <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  独立管理单条视频任务，按爆款来源、脚本、套餐、分镜、素材、配音、剪辑、发布和记录推进。
-                </p>
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h1 className="text-2xl font-semibold tracking-normal">
+                    视频工厂任务
+                  </h1>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    独立管理单条视频任务，按爆款来源、脚本、套餐、分镜、素材、配音、剪辑、发布和记录推进。
+                  </p>
+                </div>
+                <Button onClick={createTask}>
+                  <Sparkles className="size-4" />
+                  新建任务
+                </Button>
               </div>
-              <Button onClick={createTask}>
-                <Sparkles className="size-4" />
-                新建任务
-              </Button>
-            </div>
 
-            <div className="grid gap-4">
-              <TaskList
-                tasks={tasks}
-                activeTaskId={activeTask?.id || ""}
-                onSelectTask={setActiveTaskId}
-                onCreateTask={createTask}
-              />
-              {activeTask ? (
-                <WorkflowShell task={activeTask} />
-              ) : (
-                <EmptyTaskShell onCreateTask={createTask} />
-              )}
+              <div className="grid gap-4">
+                <TaskList
+                  tasks={tasks}
+                  activeTaskId={activeTask?.id || ""}
+                  onSelectTask={setActiveTaskId}
+                  onCreateTask={createTask}
+                />
+                {activeTask ? (
+                  <WorkflowShell task={activeTask} />
+                ) : (
+                  <EmptyTaskShell onCreateTask={createTask} />
+                )}
+              </div>
             </div>
-          </div>
 
             <SourceCollectionPanel
               keyword={sourceKeyword}
@@ -725,6 +812,14 @@ function VideoFactoryShell() {
               onRemoveAsset={removeVideoAsset}
             />
 
+            <TimelineAssemblyPanel
+              voice={voicePlan}
+              timeline={videoTimeline}
+              storyboardCount={storyboardShots.length}
+              assetCount={videoAssets.length}
+              onAssembleTimeline={assembleTimeline}
+            />
+
             <PublishPanel
               draft={publishDraft}
               autoPublishEnabled={autoPublishEnabled}
@@ -751,7 +846,8 @@ function VideoFactoryShell() {
               <FeatureFlagList result={license.result} />
             </div>
             <div className="rounded-lg border bg-background p-4 text-sm leading-6 text-muted-foreground">
-              发布、批量矩阵和 DaVinci 引擎仍受独立功能开关控制。未授权时，相关任务动作保持不可运行状态。
+              发布、批量矩阵和 DaVinci
+              引擎仍受独立功能开关控制。未授权时，相关任务动作保持不可运行状态。
             </div>
           </aside>
         </section>
@@ -832,8 +928,7 @@ function TaskList({
                 </span>
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {task.workflow.length} 步流程 ·{" "}
-                {task.createdAt.slice(0, 10)}
+                {task.workflow.length} 步流程 · {task.createdAt.slice(0, 10)}
               </div>
             </button>
           )
@@ -1010,7 +1105,11 @@ function SourceCollectionPanel({
               value={douyinUrl}
               onChange={onDouyinUrlChange}
             />
-            <Button className="mt-3" variant="outline" onClick={onImportDouyinLink}>
+            <Button
+              className="mt-3"
+              variant="outline"
+              onClick={onImportDouyinLink}
+            >
               <ListChecks className="size-4" />
               导入链接
             </Button>
@@ -1395,7 +1494,8 @@ function VideoAssetLibraryPanel({
         <div>
           <h2 className="text-lg font-semibold">任务素材库</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            火柴人图复用图片生成设置；视频和音频只保存任务级文件引用，避免把大文件写入 IndexedDB。
+            火柴人图复用图片生成设置；视频和音频只保存任务级文件引用，避免把大文件写入
+            IndexedDB。
           </p>
         </div>
         <ImagePlus className="size-5 text-muted-foreground" />
@@ -1471,6 +1571,129 @@ function VideoAssetLibraryPanel({
   )
 }
 
+function TimelineAssemblyPanel({
+  voice,
+  timeline,
+  storyboardCount,
+  assetCount,
+  onAssembleTimeline,
+}: {
+  voice: VoicePlan | null
+  timeline: VideoTimeline | null
+  storyboardCount: number
+  assetCount: number
+  onAssembleTimeline: () => void
+}) {
+  const timelineSeconds = timeline ? Math.round(timeline.durationMs / 1000) : 0
+
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">配音字幕和统一时间线</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            批准脚本后生成任务级配音文件引用、字幕 cue 和 renderer 共用的
+            VideoTimeline。
+          </p>
+        </div>
+        <Button onClick={onAssembleTimeline}>
+          <Clock3 className="size-4" />
+          生成时间线
+        </Button>
+      </div>
+
+      <div className="grid gap-4">
+        <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
+          <TimelineMetric label="分镜" value={`${storyboardCount}`} />
+          <TimelineMetric label="素材" value={`${assetCount}`} />
+          <TimelineMetric
+            label="字幕"
+            value={`${voice?.subtitles.length || 0}`}
+          />
+          <TimelineMetric
+            label="时长"
+            value={timeline ? `${timelineSeconds}s` : "--"}
+          />
+        </div>
+
+        {voice || timeline ? (
+          <div className="grid gap-4">
+            {voice?.audio ? (
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
+                  配音文件
+                </div>
+                <div className="truncate font-mono text-xs text-muted-foreground">
+                  {voice.audio.path}
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  TTS 未返回 timestamps 时，当前版本使用脚本句子级 fallback
+                  timing；用户仍可手动改脚本后重新生成。
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-4 max-lg:grid-cols-1">
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
+                  字幕预览
+                </div>
+                <div className="grid gap-2">
+                  {(voice?.subtitles || []).slice(0, 5).map((cue) => (
+                    <div
+                      key={cue.id}
+                      className="grid grid-cols-[96px_minmax(0,1fr)] gap-2 text-xs"
+                    >
+                      <span className="font-mono text-muted-foreground">
+                        {Math.round(cue.startMs / 1000)}-
+                        {Math.round(cue.endMs / 1000)}s
+                      </span>
+                      <span className="truncate">{cue.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
+                  Timeline tracks
+                </div>
+                <div className="grid gap-2">
+                  {(timeline?.tracks || []).map((track) => (
+                    <div
+                      key={track.id}
+                      className="flex items-center justify-between gap-2 rounded-md border bg-background px-2 py-1.5 text-xs"
+                    >
+                      <span className="font-medium">{track.type}</span>
+                      <span className="font-mono text-muted-foreground">
+                        {track.clips.length} clips
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+            完成脚本、分镜和素材后生成统一时间线；缺少真实 TTS
+            对齐数据时会保留可编辑的句子级时间码。
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function TimelineMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 font-mono text-lg font-semibold">{value}</div>
+    </div>
+  )
+}
+
 function PublishPanel({
   draft,
   autoPublishEnabled,
@@ -1494,7 +1717,8 @@ function PublishPanel({
         <div>
           <h2 className="text-lg font-semibold">发布确认</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            标题、话题、简介、封面和账号必须由用户确认后才会交给授权浏览器 Profile 执行。
+            标题、话题、简介、封面和账号必须由用户确认后才会交给授权浏览器
+            Profile 执行。
           </p>
         </div>
         <Button variant="outline" onClick={onGenerateDraft}>
@@ -1726,7 +1950,9 @@ function ApiProfileEditor({
         <TextField
           label="Profile ID"
           value={draft.id}
-          onChange={(value) => setDraft((current) => ({ ...current, id: value }))}
+          onChange={(value) =>
+            setDraft((current) => ({ ...current, id: value }))
+          }
         />
         <TextField
           label="显示名称"
