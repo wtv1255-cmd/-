@@ -11,6 +11,7 @@ import {
   Settings,
   RadioTower,
   Save,
+  Search,
   Sparkles,
   UploadCloud,
 } from "lucide-react"
@@ -43,7 +44,9 @@ import {
 import {
   createTaskFileRef,
   createVideoTaskSnapshot,
+  readVideoTaskSnapshot,
   saveVideoTaskSnapshot,
+  type VideoTaskSnapshot,
 } from "@/lib/video-domain"
 import {
   API_PROFILE_SERVICES,
@@ -58,6 +61,13 @@ import {
   type ApiProfileService,
   type ApiProfileStore,
 } from "@/lib/api-profiles"
+import {
+  collectViralSourceCandidates,
+  createDouyinLinkSourceCandidate,
+  createLocalUploadSourceCandidate,
+  type ViralSourceCandidate,
+  type ViralSourceCollectionMode,
+} from "@/lib/video-source-adapters"
 
 const defaultPublishAccount: PublishAccount = {
   id: "douyin-main",
@@ -72,6 +82,11 @@ const apiProfileServiceLabels: Record<ApiProfileService, string> = {
   image_generation: "图片生成",
   video_parsing: "视频解析",
   publish_helper: "发布辅助",
+}
+
+const sourceModeLabels: Record<ViralSourceCollectionMode, string> = {
+  recent_24_48h: "近 24-48 小时新爆款",
+  stable_7d: "近 7 天稳态爆款",
 }
 
 export default function VideoFactoryPage() {
@@ -90,6 +105,16 @@ function VideoFactoryShell() {
     createDefaultApiProfileStore
   )
   const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null)
+  const [sourceKeyword, setSourceKeyword] = useState("剪映爆款")
+  const [sourceMode, setSourceMode] =
+    useState<ViralSourceCollectionMode>("recent_24_48h")
+  const [sourceCandidates, setSourceCandidates] = useState<
+    ViralSourceCandidate[]
+  >([])
+  const [sourceStatus, setSourceStatus] = useState("等待采集爆款来源")
+  const [isCollectingSources, setIsCollectingSources] = useState(false)
+  const [manualDouyinUrl, setManualDouyinUrl] = useState("")
+  const [localUploadName, setLocalUploadName] = useState("")
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -204,6 +229,119 @@ function VideoFactoryShell() {
     )
     persistTasks([task, ...tasks], task.id)
     setToast("已创建视频任务")
+  }
+
+  const updateActiveTaskSnapshot = (
+    patch: (snapshot: VideoTaskSnapshot) => VideoTaskSnapshot
+  ) => {
+    if (!activeTask) {
+      setToast("请先创建视频任务")
+      return
+    }
+    const snapshot =
+      readVideoTaskSnapshot(activeTask.id) ||
+      createVideoTaskSnapshot({
+        id: activeTask.id,
+        title: activeTask.title,
+        status: activeTask.status,
+        createdAt: activeTask.createdAt,
+        updatedAt: activeTask.updatedAt,
+        workflow: activeTask.workflow,
+      })
+    saveVideoTaskSnapshot(patch(snapshot))
+  }
+
+  const collectSources = async () => {
+    setIsCollectingSources(true)
+    try {
+      const result = await collectViralSourceCandidates({
+        keyword: sourceKeyword,
+        mode: sourceMode,
+        adapters: [
+          {
+            id: "authorized-douyin-browser",
+            label: "授权抖音浏览器",
+            collect: async () => ({
+              ok: false,
+              adapterId: "authorized-douyin-browser",
+              reason: "login_required",
+              message: "需要用户授权登录态或处理风控后才能自动采集。",
+            }),
+          },
+        ],
+      })
+      setSourceCandidates(result.candidates)
+      setSourceStatus(
+        result.failures.length
+          ? `${sourceModeLabels[result.mode]}：自动采集未完成，手动导入仍可继续。`
+          : result.summary
+      )
+    } finally {
+      setIsCollectingSources(false)
+    }
+  }
+
+  const selectSourceCandidate = (candidate: ViralSourceCandidate) => {
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      source:
+        candidate.sourceKind === "local_upload"
+          ? {
+              mode: "local_upload",
+              userTopic: candidate.title,
+              sourceVideo: createTaskFileRef({
+                taskId: snapshot.id,
+                kind: "source_video",
+                filename: candidate.localFile?.filename || "source-video.mp4",
+                bytes: candidate.localFile?.bytes,
+                mimeType: candidate.localFile?.mimeType,
+              }),
+            }
+          : {
+              mode:
+                candidate.sourceKind === "douyin_link"
+                  ? "douyin_link"
+                  : "keyword_search",
+              keyword: sourceKeyword.trim() || undefined,
+              douyinUrl: candidate.url,
+              userTopic: candidate.title,
+            },
+      records: [
+        ...snapshot.records,
+        {
+          id: `source_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "source_selected",
+          message: `${candidate.title} · ${candidate.author} · ${
+            candidate.sourceKind === "local_upload"
+              ? "本地上传"
+              : sourceModeLabels[sourceMode]
+          }`,
+        },
+      ],
+    }))
+    setToast("已写入爆款来源")
+  }
+
+  const importDouyinLink = () => {
+    const candidate = createDouyinLinkSourceCandidate({
+      url: manualDouyinUrl,
+      title: "手动导入抖音链接",
+    })
+    setSourceCandidates((current) => [candidate, ...current])
+    selectSourceCandidate(candidate)
+    setManualDouyinUrl("")
+  }
+
+  const importLocalUpload = () => {
+    const candidate = createLocalUploadSourceCandidate({
+      filename: localUploadName || "source-video.mp4",
+      bytes: 0,
+      mimeType: "video/mp4",
+    })
+    setSourceCandidates((current) => [candidate, ...current])
+    selectSourceCandidate(candidate)
+    setLocalUploadName("")
   }
 
   const persistDraft = (draft: PublishDraft) => {
@@ -330,6 +468,24 @@ function VideoFactoryShell() {
               )}
             </div>
           </div>
+
+            <SourceCollectionPanel
+              keyword={sourceKeyword}
+              mode={sourceMode}
+              candidates={sourceCandidates}
+              status={sourceStatus}
+              isCollecting={isCollectingSources}
+              douyinUrl={manualDouyinUrl}
+              localUploadName={localUploadName}
+              onKeywordChange={setSourceKeyword}
+              onModeChange={setSourceMode}
+              onCollect={collectSources}
+              onSelectCandidate={selectSourceCandidate}
+              onDouyinUrlChange={setManualDouyinUrl}
+              onImportDouyinLink={importDouyinLink}
+              onLocalUploadNameChange={setLocalUploadName}
+              onImportLocalUpload={importLocalUpload}
+            />
 
             <PublishPanel
               draft={publishDraft}
@@ -527,6 +683,160 @@ function StepStateBadge({ state }: { state: VideoWorkflowStepState }) {
     <span className="shrink-0 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">
       {labelMap[state]}
     </span>
+  )
+}
+
+function SourceCollectionPanel({
+  keyword,
+  mode,
+  candidates,
+  status,
+  isCollecting,
+  douyinUrl,
+  localUploadName,
+  onKeywordChange,
+  onModeChange,
+  onCollect,
+  onSelectCandidate,
+  onDouyinUrlChange,
+  onImportDouyinLink,
+  onLocalUploadNameChange,
+  onImportLocalUpload,
+}: {
+  keyword: string
+  mode: ViralSourceCollectionMode
+  candidates: ViralSourceCandidate[]
+  status: string
+  isCollecting: boolean
+  douyinUrl: string
+  localUploadName: string
+  onKeywordChange: (value: string) => void
+  onModeChange: (value: ViralSourceCollectionMode) => void
+  onCollect: () => void
+  onSelectCandidate: (candidate: ViralSourceCandidate) => void
+  onDouyinUrlChange: (value: string) => void
+  onImportDouyinLink: () => void
+  onLocalUploadNameChange: (value: string) => void
+  onImportLocalUpload: () => void
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">爆款采集</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            关键词自动采集走适配器；登录态、接口或风控失败时，仍可粘贴抖音链接或导入本地视频。
+          </p>
+        </div>
+        <RadioTower className="size-5 text-muted-foreground" />
+      </div>
+
+      <div className="grid gap-4">
+        <div className="grid grid-cols-[minmax(0,1fr)_220px_auto] gap-3 max-lg:grid-cols-1">
+          <TextField
+            label="关键词"
+            value={keyword}
+            onChange={onKeywordChange}
+          />
+          <label className="grid gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              候选模式
+            </span>
+            <select
+              value={mode}
+              onChange={(event) =>
+                onModeChange(event.target.value as ViralSourceCollectionMode)
+              }
+              className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+            >
+              <option value="recent_24_48h">近 24-48 小时新爆款</option>
+              <option value="stable_7d">近 7 天稳态爆款</option>
+            </select>
+          </label>
+          <div className="grid content-end">
+            <Button onClick={onCollect} disabled={isCollecting}>
+              <Search className="size-4" />
+              {isCollecting ? "采集中" : "采集候选"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          {status}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 max-lg:grid-cols-1">
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <TextField
+              label="抖音链接"
+              value={douyinUrl}
+              onChange={onDouyinUrlChange}
+            />
+            <Button className="mt-3" variant="outline" onClick={onImportDouyinLink}>
+              <ListChecks className="size-4" />
+              导入链接
+            </Button>
+          </div>
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <TextField
+              label="本地视频文件名"
+              value={localUploadName}
+              onChange={onLocalUploadNameChange}
+            />
+            <Button
+              className="mt-3"
+              variant="outline"
+              onClick={onImportLocalUpload}
+            >
+              <UploadCloud className="size-4" />
+              记录本地视频
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-2">
+          {candidates.length ? (
+            candidates.slice(0, 5).map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className="rounded-lg border bg-muted/30 p-3 text-left transition hover:bg-muted"
+                onClick={() => onSelectCandidate(candidate)}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{candidate.title}</span>
+                  <span className="rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    {candidate.sourceKind === "local_upload"
+                      ? "本地视频"
+                      : candidate.sourceKind === "douyin_link"
+                        ? "抖音链接"
+                        : "自动候选"}
+                  </span>
+                </div>
+                <div className="mt-1 grid gap-1 text-xs text-muted-foreground">
+                  <span>
+                    {candidate.author}
+                    {candidate.durationSeconds
+                      ? ` · ${candidate.durationSeconds}s`
+                      : ""}
+                  </span>
+                  <span>
+                    赞 {candidate.metrics.likes ?? 0} · 评{" "}
+                    {candidate.metrics.comments ?? 0} · 收藏{" "}
+                    {candidate.metrics.favorites ?? 0} · 分享{" "}
+                    {candidate.metrics.shares ?? 0}
+                  </span>
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+              暂无自动候选。可以直接使用手动导入继续任务。
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }
 
