@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Clock3,
   FileVideo,
+  ImagePlus,
   Layers3,
   ListChecks,
   Lock,
@@ -47,6 +48,8 @@ import {
   readVideoTaskSnapshot,
   saveVideoTaskSnapshot,
   type StoryboardShot,
+  type VideoAsset,
+  type VideoAssetKind,
   type VideoDurationPreset,
   type VideoPackageId,
   type VideoTaskSnapshot,
@@ -65,6 +68,13 @@ import {
   type ApiProfileService,
   type ApiProfileStore,
 } from "@/lib/api-profiles"
+import {
+  VIDEO_ASSET_CATEGORY_OPTIONS,
+  buildVideoImageGenerationRequest,
+  createImportedVideoAsset,
+  createVideoAssetLogEntry,
+  removeVideoAssetById,
+} from "@/lib/video-assets"
 import {
   buildScriptGenerationRequest,
   createManualVideoAnalysisDraft,
@@ -142,6 +152,10 @@ function VideoFactoryShell() {
   const [selectedDuration, setSelectedDuration] =
     useState<VideoDurationPreset>("45-60s")
   const [storyboardShots, setStoryboardShots] = useState<StoryboardShot[]>([])
+  const [assetImportKind, setAssetImportKind] =
+    useState<VideoAssetKind>("yanling_clip")
+  const [assetImportName, setAssetImportName] = useState("")
+  const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([])
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -463,6 +477,78 @@ function VideoFactoryShell() {
     }))
   }
 
+  const addVideoAsset = (asset: VideoAsset, message: string) => {
+    setVideoAssets((current) => [asset, ...current])
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      assets: [asset, ...snapshot.assets],
+      records: [
+        ...snapshot.records,
+        {
+          id: `asset_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "asset_added",
+          message,
+        },
+      ],
+    }))
+  }
+
+  const generateStickmanAsset = () => {
+    const shot = storyboardShots.find((item) => item.visualType === "stickman")
+    if (!activeTask || !shot) {
+      setToast("请先生成火柴人分镜")
+      return
+    }
+    const request = buildVideoImageGenerationRequest({
+      profile: buildApiProfileRequestContext(apiProfiles, "image_generation"),
+      prompt: shot.prompt,
+      negativePrompt: shot.negativePrompt,
+    })
+    const logEntry = createVideoAssetLogEntry(request)
+    const asset = createImportedVideoAsset({
+      taskId: activeTask.id,
+      kind: "stickman_image",
+      filename: `${shot.id}-stickman.png`,
+      mimeType: "image/png",
+      tags: [shot.id, logEntry.profileId],
+    })
+    addVideoAsset(
+      asset,
+      `火柴人图任务已记录：${shot.id} · ${logEntry.profileId} · ${logEntry.promptLength} 字符`
+    )
+    setToast("已记录火柴人图资产")
+  }
+
+  const importVideoAsset = () => {
+    if (!activeTask) {
+      setToast("请先创建视频任务")
+      return
+    }
+    const asset = createImportedVideoAsset({
+      taskId: activeTask.id,
+      kind: assetImportKind,
+      filename: assetImportName || `${assetImportKind}.bin`,
+      mimeType:
+        assetImportKind === "bgm" || assetImportKind === "sfx"
+          ? "audio/mpeg"
+          : assetImportKind.includes("image")
+            ? "image/png"
+            : "video/mp4",
+    })
+    addVideoAsset(asset, `已导入任务素材：${asset.displayName}`)
+    setAssetImportName("")
+  }
+
+  const removeVideoAsset = (assetId: string) => {
+    setVideoAssets((current) => removeVideoAssetById(current, assetId))
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      assets: removeVideoAssetById(snapshot.assets, assetId),
+    }))
+    setToast("已移除任务素材记录")
+  }
+
   const persistDraft = (draft: PublishDraft) => {
     const safeDraft = sanitizePublishDraftForExport(draft)
     setPublishDraft(safeDraft)
@@ -626,6 +712,17 @@ function VideoFactoryShell() {
               onDurationChange={setSelectedDuration}
               onGenerateStoryboard={generateStoryboard}
               onUpdateShot={updateStoryboardShot}
+            />
+
+            <VideoAssetLibraryPanel
+              assets={videoAssets}
+              importKind={assetImportKind}
+              importName={assetImportName}
+              onGenerateStickman={generateStickmanAsset}
+              onImportKindChange={setAssetImportKind}
+              onImportNameChange={setAssetImportName}
+              onImportAsset={importVideoAsset}
+              onRemoveAsset={removeVideoAsset}
             />
 
             <PublishPanel
@@ -1265,6 +1362,107 @@ function StoryboardPanel({
           ) : (
             <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
               生成脚本后选择套餐和时长，即可创建可编辑分镜。
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function VideoAssetLibraryPanel({
+  assets,
+  importKind,
+  importName,
+  onGenerateStickman,
+  onImportKindChange,
+  onImportNameChange,
+  onImportAsset,
+  onRemoveAsset,
+}: {
+  assets: VideoAsset[]
+  importKind: VideoAssetKind
+  importName: string
+  onGenerateStickman: () => void
+  onImportKindChange: (value: VideoAssetKind) => void
+  onImportNameChange: (value: string) => void
+  onImportAsset: () => void
+  onRemoveAsset: (assetId: string) => void
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">任务素材库</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            火柴人图复用图片生成设置；视频和音频只保存任务级文件引用，避免把大文件写入 IndexedDB。
+          </p>
+        </div>
+        <ImagePlus className="size-5 text-muted-foreground" />
+      </div>
+
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <Button onClick={onGenerateStickman}>
+            <ImagePlus className="size-4" />
+            记录火柴人图
+          </Button>
+          <label className="grid min-w-44 gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              素材类别
+            </span>
+            <select
+              value={importKind}
+              onChange={(event) =>
+                onImportKindChange(event.target.value as VideoAssetKind)
+              }
+              className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+            >
+              {VIDEO_ASSET_CATEGORY_OPTIONS.map((option) => (
+                <option key={option.kind} value={option.kind}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <TextField
+            label="导入文件名"
+            value={importName}
+            onChange={onImportNameChange}
+          />
+          <Button variant="outline" onClick={onImportAsset}>
+            <UploadCloud className="size-4" />
+            导入素材记录
+          </Button>
+        </div>
+
+        <div className="grid gap-2">
+          {assets.length ? (
+            assets.map((asset) => (
+              <div
+                key={asset.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg border bg-muted/30 p-3"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {asset.displayName}
+                  </div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {asset.kind} · {asset.file.path}
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onRemoveAsset(asset.id)}
+                >
+                  移除
+                </Button>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+              还没有任务素材。可先记录火柴人图，或导入炎灵录屏、成品展示、BGM、音效和封面。
             </div>
           )}
         </div>
