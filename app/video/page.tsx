@@ -94,6 +94,13 @@ import {
   createVoicePlanFromScript,
 } from "@/lib/video-timeline"
 import {
+  createRenderEngineOptions,
+  createRenderExportPlan,
+  type RenderEngineId,
+  type RenderEngineOption,
+  type RenderExportPlan,
+} from "@/lib/video-rendering"
+import {
   collectViralSourceCandidates,
   createDouyinLinkSourceCandidate,
   createLocalUploadSourceCandidate,
@@ -164,6 +171,17 @@ function VideoFactoryShell() {
   const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([])
   const [voicePlan, setVoicePlan] = useState<VoicePlan | null>(null)
   const [videoTimeline, setVideoTimeline] = useState<VideoTimeline | null>(null)
+  const [requestedRenderEngine, setRequestedRenderEngine] =
+    useState<RenderEngineId>("jianying")
+  const [renderEngines] = useState<RenderEngineOption[]>(() =>
+    createRenderEngineOptions({
+      jianyingAvailable: false,
+      ffmpegAvailable: true,
+      remotionAvailable: false,
+      davinciAvailable: false,
+    })
+  )
+  const [renderPlan, setRenderPlan] = useState<RenderExportPlan | null>(null)
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -205,6 +223,7 @@ function VideoFactoryShell() {
         setVideoAssets([])
         setVoicePlan(null)
         setVideoTimeline(null)
+        setRenderPlan(null)
         return
       }
       const snapshot = readVideoTaskSnapshot(activeTask.id)
@@ -214,11 +233,30 @@ function VideoFactoryShell() {
       setVideoTimeline(
         snapshot?.timeline.tracks.length ? snapshot.timeline : null
       )
+      const renderedAsset = snapshot?.assets.find(
+        (asset) =>
+          asset.kind === "rendered_video" &&
+          asset.tags?.includes("render_export_plan")
+      )
+      setRenderPlan(
+        renderedAsset
+          ? {
+              taskId: activeTask.id,
+              engineId: null,
+              requestedEngineId: requestedRenderEngine,
+              status: "ready",
+              output: renderedAsset,
+              previewPath: renderedAsset.file.path,
+              command: "",
+              message: "已恢复上次导出计划。",
+            }
+          : null
+      )
     })
     return () => {
       alive = false
     }
-  }, [activeTask?.id])
+  }, [activeTask?.id, requestedRenderEngine])
 
   const persistTasks = (nextTasks: VideoTask[], nextActiveId?: string) => {
     setTasks(nextTasks)
@@ -636,6 +674,50 @@ function VideoFactoryShell() {
     setToast("已生成配音、字幕和统一时间线")
   }
 
+  const prepareRenderExport = () => {
+    if (!activeTask || !videoTimeline) {
+      setToast("请先生成统一时间线")
+      return
+    }
+
+    const plan = createRenderExportPlan({
+      taskId: activeTask.id,
+      timeline: videoTimeline,
+      requestedEngineId: requestedRenderEngine,
+      engines: renderEngines,
+    })
+    setRenderPlan(plan)
+
+    const isUsablePlan =
+      plan.status === "ready" || plan.status === "fallback_ready"
+    const withoutPreviousRenderPlan = (assets: VideoAsset[]) =>
+      assets.filter((asset) => !asset.tags?.includes("render_export_plan"))
+
+    if (isUsablePlan) {
+      setVideoAssets((current) => [
+        plan.output,
+        ...withoutPreviousRenderPlan(current),
+      ])
+    }
+
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      assets: isUsablePlan
+        ? [plan.output, ...withoutPreviousRenderPlan(snapshot.assets)]
+        : snapshot.assets,
+      records: [
+        ...snapshot.records,
+        {
+          id: `render_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "render_export_plan",
+          message: `${plan.message} 输出引用：${plan.previewPath}`,
+        },
+      ],
+    }))
+    setToast(isUsablePlan ? "已生成导出计划和预览路径" : "当前没有可用渲染引擎")
+  }
+
   const persistDraft = (draft: PublishDraft) => {
     const safeDraft = sanitizePublishDraftForExport(draft)
     setPublishDraft(safeDraft)
@@ -818,6 +900,15 @@ function VideoFactoryShell() {
               storyboardCount={storyboardShots.length}
               assetCount={videoAssets.length}
               onAssembleTimeline={assembleTimeline}
+            />
+
+            <RenderExportPanel
+              engines={renderEngines}
+              requestedEngine={requestedRenderEngine}
+              plan={renderPlan}
+              hasTimeline={Boolean(videoTimeline?.tracks.length)}
+              onEngineChange={setRequestedRenderEngine}
+              onPrepareExport={prepareRenderExport}
             />
 
             <PublishPanel
@@ -1691,6 +1782,107 @@ function TimelineMetric({ label, value }: { label: string; value: string }) {
       <div className="text-xs font-medium text-muted-foreground">{label}</div>
       <div className="mt-1 font-mono text-lg font-semibold">{value}</div>
     </div>
+  )
+}
+
+function RenderExportPanel({
+  engines,
+  requestedEngine,
+  plan,
+  hasTimeline,
+  onEngineChange,
+  onPrepareExport,
+}: {
+  engines: RenderEngineOption[]
+  requestedEngine: RenderEngineId
+  plan: RenderExportPlan | null
+  hasTimeline: boolean
+  onEngineChange: (engine: RenderEngineId) => void
+  onPrepareExport: () => void
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">剪辑预览和导出</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            所有引擎都消费同一条 VideoTimeline；剪映不可用时可切到内置 FFmpeg
+            兜底，DaVinci 未检测到时保持禁用。
+          </p>
+        </div>
+        <Button disabled={!hasTimeline} onClick={onPrepareExport}>
+          <FileVideo className="size-4" />
+          准备导出
+        </Button>
+      </div>
+
+      <div className="grid gap-4">
+        <div className="grid grid-cols-4 gap-2 max-xl:grid-cols-2 max-sm:grid-cols-1">
+          {engines.map((engine) => {
+            const active = requestedEngine === engine.id
+            const unavailable = engine.status !== "available"
+            return (
+              <button
+                key={engine.id}
+                type="button"
+                className={`grid min-h-32 gap-2 rounded-lg border p-3 text-left transition ${
+                  active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "bg-muted/30 hover:bg-muted"
+                }`}
+                onClick={() => onEngineChange(engine.id)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-sm font-medium">{engine.label}</div>
+                  <span className="rounded-md border bg-background/70 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    {engine.status}
+                  </span>
+                </div>
+                <div className="text-xs leading-5 opacity-80">
+                  {engine.description}
+                </div>
+                {unavailable ? (
+                  <div className="text-xs leading-5 opacity-80">
+                    {engine.disabledReason}
+                  </div>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+
+        {!hasTimeline ? (
+          <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+            先生成统一时间线，再准备渲染导出计划。
+          </div>
+        ) : null}
+
+        {plan ? (
+          <div className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium">{plan.message}</div>
+              <StatusBadge status={plan.status} />
+            </div>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] gap-2 text-xs max-sm:grid-cols-1">
+              <span className="text-muted-foreground">预览/输出路径</span>
+              <span className="min-w-0 truncate font-mono">
+                {plan.previewPath}
+              </span>
+              <span className="text-muted-foreground">渲染命令</span>
+              <span className="min-w-0 truncate font-mono">
+                {plan.command || "等待可用引擎"}
+              </span>
+            </div>
+            {plan.fallbackFrom ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                已从 {plan.fallbackFrom} 自动切换到 {plan.engineId}
+                ；原引擎状态保留，任务素材和时间线未被改写。
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </section>
   )
 }
 
