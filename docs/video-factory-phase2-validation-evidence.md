@@ -16,6 +16,16 @@
 - Playwright MCP 打开 `http://127.0.0.1:48606/video`，确认设置模块显示 API Profile，并明确文本和图片生成的 API Profile 设置已接入运行时主备；视频解析和发布辅助是配置预留。
 - Playwright MCP 截图：`follow01-api-profile-settings.png`。
 
+## 文案板子与品牌贴片补充验证
+
+- `node --test tests/video-analysis.test.mjs tests/video-storyboard.test.mjs tests/video-assets.test.mjs tests/video-factory-modules.test.mjs tests/video-rendering.test.mjs tests/electron-jianying-draft.test.mjs`
+- `pnpm tsc --noEmit`
+- 文案板子验证：产品引流是可选板子，默认主题为豆包 + 炎灵 + 剪映；通用洗稿不强制产品名、产品图标或品牌贴片。
+- 合规验证：产品引流 prompt 会降低粗口、收益承诺、保证赚钱和直接站外导流说法；最终视频口播不应直接承诺日入/月入、保证收益或要求加微信/加群。
+- 分镜验证：图片提示词描述场景，不要求 AI 生图生成 logo、字幕、对话框、气泡或 App UI 文案。
+- 素材验证：豆包图标、炎灵图标、剪映图标作为可选 `brand_sticker` 人工素材管理，不污染火柴人分镜图片行。
+- 剪映草稿验证：产品引流板子的 `task-materials.json` 记录已上传品牌贴片素材和 `brandOverlays` 手动贴片意图；非产品板子不生成产品贴片占位。
+
 ## 包体检查
 
 `dist-desktop/win-unpacked` 根目录包含 Electron 运行文件、`resources/app`、`desktop-backend` 和 `electron` 桥接脚本。精确递归检查没有发现以下本地 TTS 或大模型内容：
@@ -41,6 +51,7 @@
 - 开发服务器 UI 已通过 Playwright 验证核心模块、恢复摘要和 API Profile 设置页；API failover 的运行时证据限定为文本和图片生成路径。
 - 运行时 failover、恢复续跑、素材补图、TTS/字幕、时间线和剪映草稿合同由自动化测试覆盖。
 - AI director 当前按本地结构化草稿规划验收；本阶段没有把 AI director 外部 provider failover 记录为已通过。
+- 品牌贴片当前按 manifest/manual placement intent 验收；没有把剪映原生 overlay 轨道自动插入包装成已通过。
 
 ## 手工验收清单
 
