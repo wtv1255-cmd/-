@@ -54,6 +54,53 @@ const draftPlan = {
       },
     ],
   },
+  brandOverlays: [
+    {
+      id: "brand_overlay_doubao_icon",
+      labelId: "doubao_icon",
+      label: "豆包图标",
+      assetId: "doubao_icon_asset",
+      status: "ready",
+      required: false,
+      replacementHint: "使用已导入豆包图标作为手动品牌贴片。",
+      tags: ["doubao_icon"],
+    },
+    {
+      id: "brand_overlay_jianying_icon_placeholder",
+      labelId: "jianying_icon",
+      label: "剪映图标",
+      status: "placeholder",
+      required: false,
+      replacementHint: "可在剪映中手动补充剪映图标贴片，缺失不阻塞草稿。",
+      tags: ["jianying_icon"],
+    },
+  ],
+  materialAssets: [
+    {
+      id: "stickman_01",
+      kind: "stickman_image",
+      displayName: "01_shot_01_0-2s_stickman.png",
+      file: {
+        filename: "01_shot_01_0-2s_stickman.png",
+        path: "C:\\Users\\Administrator\\AppData\\Roaming\\她火\\tasks\\task_01\\stickman_image\\01_shot_01_0-2s_stickman.png",
+        mimeType: "image/png",
+        bytes: 1234,
+      },
+      tags: ["generated_image", "shot_01"],
+    },
+    {
+      id: "doubao_icon_asset",
+      kind: "brand_sticker",
+      displayName: "doubao-icon.png",
+      file: {
+        filename: "doubao-icon.png",
+        path: "C:\\Users\\Administrator\\AppData\\Roaming\\她火\\tasks\\task_01\\brand_sticker\\doubao-icon.png",
+        mimeType: "image/png",
+        bytes: 2048,
+      },
+      tags: ["doubao_icon"],
+    },
+  ],
 }
 
 test("Jianying draft writer creates a task-scoped editable draft package", async () => {
@@ -85,7 +132,27 @@ test("Jianying draft writer creates a task-scoped editable draft package", async
       "stickman_01",
       "placeholder_opening_hook_shot_02",
       "subtitle_01",
+      "doubao_icon_asset",
     ])
+    assert.equal(materials.assets[0].id, "stickman_01")
+    assert.equal(materials.assets[0].kind, "stickman_image")
+    assert.match(materials.assets[0].path, /stickman_image/)
+    assert.deepEqual(
+      materials.assets.map((asset) => asset.id),
+      ["stickman_01", "doubao_icon_asset"]
+    )
+    assert.deepEqual(
+      materials.brandOverlays.map((overlay) => [
+        overlay.labelId,
+        overlay.assetId,
+        overlay.status,
+        overlay.required,
+      ]),
+      [
+        ["doubao_icon", "doubao_icon_asset", "ready", false],
+        ["jianying_icon", undefined, "placeholder", false],
+      ]
+    )
     assert.ok((await stat(manifestPath)).size > 0)
   } finally {
     await rm(userDataDir, { force: true, recursive: true })

@@ -621,6 +621,8 @@ function VideoFactoryShell() {
               command: "",
               message: "已恢复上次剪映草稿计划。",
               aiDirector: { trackOrder: [], clips: [] },
+              materialAssets: [],
+              brandOverlays: [],
               requiredConfirmations: [],
             }
           : null
@@ -1557,6 +1559,8 @@ function VideoFactoryShell() {
     const plan = createJianyingDraftPlan({
       taskId: activeTask.id,
       timeline: videoTimeline,
+      materialAssets: videoAssets,
+      copywritingBoard: scriptCopywritingBoard,
     })
     const withoutPreviousDraftPlan = (assets: VideoAsset[]) =>
       assets.filter((asset) => !asset.tags?.includes("editable_draft_plan"))

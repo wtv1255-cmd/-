@@ -110,10 +110,65 @@ function createTaskMaterials(plan) {
       }
     }
   }
+  if (Array.isArray(plan?.brandOverlays)) {
+    for (const overlay of plan.brandOverlays) {
+      if (typeof overlay?.assetId === "string" && overlay.assetId.trim()) {
+        assetIds.add(overlay.assetId)
+      }
+    }
+  }
+  const materialAssets = Array.isArray(plan?.materialAssets)
+    ? plan.materialAssets
+        .filter((asset) => assetIds.has(asset?.id))
+        .map((asset) => ({
+          id: cleanSegment(asset?.id, "asset"),
+          kind: cleanSegment(asset?.kind, "asset"),
+          displayName:
+            typeof asset?.displayName === "string" ? asset.displayName : "",
+          path: typeof asset?.file?.path === "string" ? asset.file.path : "",
+          filename:
+            typeof asset?.file?.filename === "string"
+              ? asset.file.filename
+              : "",
+          mimeType:
+            typeof asset?.file?.mimeType === "string"
+              ? asset.file.mimeType
+              : "",
+          bytes: Math.max(0, Math.floor(Number(asset?.file?.bytes) || 0)),
+          tags: Array.isArray(asset?.tags)
+            ? asset.tags.filter((tag) => typeof tag === "string")
+            : [],
+        }))
+    : []
+  const brandOverlays = Array.isArray(plan?.brandOverlays)
+    ? plan.brandOverlays.map((overlay) => ({
+        id: cleanSegment(overlay?.id, "brand_overlay"),
+        labelId: cleanSegment(overlay?.labelId, "brand_icon"),
+        label: typeof overlay?.label === "string" ? overlay.label : "",
+        assetId:
+          typeof overlay?.assetId === "string" && overlay.assetId.trim()
+            ? overlay.assetId
+            : undefined,
+        status:
+          overlay?.status === "ready" || overlay?.status === "placeholder"
+            ? overlay.status
+            : "placeholder",
+        required: false,
+        replacementHint:
+          typeof overlay?.replacementHint === "string"
+            ? overlay.replacementHint
+            : "",
+        tags: Array.isArray(overlay?.tags)
+          ? overlay.tags.filter((tag) => typeof tag === "string")
+          : [],
+      }))
+    : []
 
   return {
     taskId: cleanSegment(plan?.taskId, "task"),
     assetIds: Array.from(assetIds),
+    assets: materialAssets,
+    brandOverlays,
     generatedAt: new Date().toISOString(),
   }
 }

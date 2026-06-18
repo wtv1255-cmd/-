@@ -140,6 +140,283 @@ test("AI director plan preserves locks and creates editable placeholders", async
   ])
 })
 
+test("AI director model plan can override editable clip decisions without changing locked clips", async () => {
+  const { createJianyingDraftPlan, createModelAiDirectorPlan } =
+    await importRenderingModule()
+  const basePlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+    lockedShotIds: ["shot_01"],
+  })
+  const modelPlan = createModelAiDirectorPlan({
+    fallbackPlan: basePlan.aiDirector,
+    modelText: JSON.stringify({
+      trackOrder: ["visual", "subtitle", "voice"],
+      clips: [
+        {
+          id: "shot_01_visual",
+          transition: "flash_cut",
+          zoom: "fast_in",
+          replacementHint: "should not override locked clip",
+        },
+        {
+          id: "shot_02_visual",
+          transition: "match_cut",
+          zoom: "slow_out",
+          replacementHint: "替换为产品操作录屏",
+        },
+        {
+          id: "subtitle_01",
+          emphasisSubtitle: true,
+          text: "前三秒加粗高亮",
+        },
+      ],
+    }),
+  })
+  const lockedVisual = modelPlan.clips.find((clip) => clip.id === "shot_01_visual")
+  const editableVisual = modelPlan.clips.find((clip) => clip.id === "shot_02_visual")
+  const subtitle = modelPlan.clips.find((clip) => clip.id === "subtitle_01")
+
+  assert.deepEqual(modelPlan.trackOrder, ["visual", "subtitle", "voice"])
+  assert.equal(lockedVisual.transition, "locked")
+  assert.equal(lockedVisual.zoom, "none")
+  assert.equal(editableVisual.transition, "match_cut")
+  assert.equal(editableVisual.zoom, "slow_out")
+  assert.equal(editableVisual.replacementHint, "替换为产品操作录屏")
+  assert.equal(subtitle.emphasisSubtitle, true)
+  assert.equal(subtitle.text, "前三秒加粗高亮")
+})
+
+test("AI director request is sanitized and model parse falls back on invalid output", async () => {
+  const {
+    buildAiDirectorGenerationRequest,
+    createJianyingDraftPlan,
+    createModelAiDirectorPlan,
+  } = await importRenderingModule()
+  const basePlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+  })
+  const request = buildAiDirectorGenerationRequest({
+    profile: {
+      service: "edit_director",
+      profileId: "director-main",
+      model: "director-model",
+      apiBaseUrl: "https://director.example.com/v1",
+      apiKey: "secret-director",
+    },
+    script: "小白也能一键生成短视频",
+    timeline: readyTimeline,
+    fallbackPlan: basePlan.aiDirector,
+  })
+  const fallback = createModelAiDirectorPlan({
+    fallbackPlan: basePlan.aiDirector,
+    modelText: "not json",
+  })
+  const serializedLog = JSON.stringify(request.logEntry)
+
+  assert.equal(request.body.model, "director-model")
+  assert.equal(request.body.profileId, "director-main")
+  assert.equal(request.body.apiKey, "secret-director")
+  assert.match(request.body.messages[0].content, /剪辑决策模型/)
+  assert.match(request.body.messages[1].content, /VideoTimeline/)
+  assert.equal(serializedLog.includes("secret-director"), false)
+  assert.deepEqual(fallback, basePlan.aiDirector)
+})
+
+test("product board draft plan carries optional brand sticker overlays while non-product stays clean", async () => {
+  const { createJianyingDraftPlan } = await importRenderingModule()
+  const productPlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+    copywritingBoard: "product_conversion",
+    materialAssets: [
+      {
+        id: "doubao_icon_asset",
+        kind: "brand_sticker",
+        displayName: "doubao-icon.png",
+        file: {
+          id: "doubao_icon_file",
+          taskId: "task_01",
+          kind: "brand_sticker",
+          filename: "doubao-icon.png",
+          path: "%APPDATA%/她火/tasks/task_01/brand_sticker/doubao-icon.png",
+          bytes: 2048,
+          mimeType: "image/png",
+          storage: "app_user_data_task_dir",
+        },
+        tags: ["doubao_icon"],
+      },
+      {
+        id: "yanling_icon_asset",
+        kind: "brand_sticker",
+        displayName: "yanling-icon.png",
+        file: {
+          id: "yanling_icon_file",
+          taskId: "task_01",
+          kind: "brand_sticker",
+          filename: "yanling-icon.png",
+          path: "%APPDATA%/她火/tasks/task_01/brand_sticker/yanling-icon.png",
+          bytes: 2048,
+          mimeType: "image/png",
+          storage: "app_user_data_task_dir",
+        },
+        tags: ["yanling_icon"],
+      },
+    ],
+  })
+  const genericPlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    copywritingBoard: "generic_rewrite",
+    materialAssets: productPlan.materialAssets,
+  })
+
+  assert.deepEqual(
+    productPlan.brandOverlays.map((overlay) => [
+      overlay.labelId,
+      overlay.assetId,
+      overlay.status,
+      overlay.required,
+    ]),
+    [
+      ["doubao_icon", "doubao_icon_asset", "ready", false],
+      ["yanling_icon", "yanling_icon_asset", "ready", false],
+      ["jianying_icon", undefined, "placeholder", false],
+    ]
+  )
+  assert.match(
+    productPlan.brandOverlays[0].replacementHint,
+    /手动.*贴片|已导入素材/
+  )
+  assert.match(productPlan.brandOverlays[2].replacementHint, /可选|不阻塞/)
+  assert.deepEqual(genericPlan.brandOverlays, [])
+})
+
+test("AI director request carries brand overlay context without asking image model for logos", async () => {
+  const { buildAiDirectorGenerationRequest, createJianyingDraftPlan } =
+    await importRenderingModule()
+  const productPlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    copywritingBoard: "product_conversion",
+    materialAssets: [
+      {
+        id: "doubao_icon_asset",
+        kind: "brand_sticker",
+        displayName: "doubao-icon.png",
+        file: {
+          id: "doubao_icon_file",
+          taskId: "task_01",
+          kind: "brand_sticker",
+          filename: "doubao-icon.png",
+          path: "%APPDATA%/她火/tasks/task_01/brand_sticker/doubao-icon.png",
+          bytes: 2048,
+          mimeType: "image/png",
+          storage: "app_user_data_task_dir",
+        },
+        tags: ["doubao_icon"],
+      },
+    ],
+  })
+  const request = buildAiDirectorGenerationRequest({
+    profile: {
+      service: "edit_director",
+      profileId: "director-main",
+      model: "director-model",
+      apiBaseUrl: "https://director.example.com/v1",
+      apiKey: "secret-director",
+    },
+    script: "产品引流口播",
+    timeline: readyTimeline,
+    fallbackPlan: productPlan.aiDirector,
+    brandOverlays: productPlan.brandOverlays,
+  })
+  const payload = JSON.parse(request.body.messages[1].content)
+
+  assert.match(request.body.messages[0].content, /不得.*生成.*logo|不要.*生成.*logo/i)
+  assert.deepEqual(
+    payload.brandOverlays.map((overlay) => [
+      overlay.labelId,
+      overlay.assetId,
+      overlay.status,
+    ]),
+    [
+      ["doubao_icon", "doubao_icon_asset", "ready"],
+      ["yanling_icon", undefined, "placeholder"],
+      ["jianying_icon", undefined, "placeholder"],
+    ]
+  )
+  assert.equal(JSON.stringify(request.logEntry).includes("secret-director"), false)
+})
+
+test("image asset draft timeline exports generated shot images as a visual track", async () => {
+  const { createImageAssetsDraftTimeline } = await importRenderingModule()
+  const timeline = createImageAssetsDraftTimeline({
+    taskId: "task_01",
+    shots: [
+      {
+        id: "shot_01",
+        startMs: 0,
+        endMs: 2000,
+        visualType: "stickman",
+        assetIds: [],
+      },
+      {
+        id: "shot_02",
+        startMs: 2000,
+        endMs: 4500,
+        visualType: "stickman",
+        assetIds: ["manual_image_02"],
+      },
+      {
+        id: "shot_03",
+        startMs: 4500,
+        endMs: 6000,
+        visualType: "yanling_clip",
+        assetIds: ["clip_03"],
+      },
+    ],
+    assets: [
+      {
+        id: "generated_image_01",
+        kind: "stickman_image",
+        tags: ["generated_image", "shot_01"],
+      },
+      {
+        id: "manual_image_02",
+        kind: "stickman_image",
+        tags: ["manual"],
+      },
+      {
+        id: "clip_03",
+        kind: "yanling_clip",
+        tags: [],
+      },
+    ],
+  })
+
+  assert.equal(timeline.taskId, "task_01")
+  assert.equal(timeline.durationMs, 4500)
+  assert.equal(timeline.tracks.length, 1)
+  assert.equal(timeline.tracks[0].id, "visual")
+  assert.deepEqual(
+    timeline.tracks[0].clips.map((clip) => [
+      clip.id,
+      clip.assetId,
+      clip.startMs,
+      clip.durationMs,
+    ]),
+    [
+      ["shot_01_visual", "generated_image_01", 0, 2000],
+      ["shot_02_visual", "manual_image_02", 2000, 2500],
+    ]
+  )
+})
+
 test("destructive Jianying draft actions require explicit confirmation", async () => {
   const { createJianyingDraftPlan } = await importRenderingModule()
   const plan = createJianyingDraftPlan({

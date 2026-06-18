@@ -1,4 +1,11 @@
-import type { TaskFileRef, VideoAsset, VideoTimeline } from "@/lib/video-domain"
+import type { ApiProfileRequestContext } from "@/lib/api-profiles"
+import type { CopywritingBoardId } from "@/lib/video-analysis"
+import type {
+  StoryboardShot,
+  TaskFileRef,
+  VideoAsset,
+  VideoTimeline,
+} from "@/lib/video-domain"
 
 export type RenderEngineId = "jianying" | "ffmpeg" | "remotion" | "davinci"
 
@@ -50,9 +57,32 @@ export type JianyingDraftDirectorClip = {
   placeholder: boolean
   replacementHint?: string
   transition?: string
-  zoom?: "none" | "slow_in"
+  zoom?: "none" | "slow_in" | "slow_out" | "fast_in"
   emphasisSubtitle?: boolean
   text?: string
+}
+
+export type JianyingDraftMaterialAsset = Pick<
+  VideoAsset,
+  | "id"
+  | "kind"
+  | "displayName"
+  | "file"
+  | "tags"
+  | "durationMs"
+  | "width"
+  | "height"
+>
+
+export type JianyingDraftBrandOverlay = {
+  id: string
+  labelId: "doubao_icon" | "yanling_icon" | "jianying_icon"
+  label: string
+  assetId?: string
+  status: "ready" | "placeholder"
+  required: false
+  replacementHint: string
+  tags: string[]
 }
 
 export type JianyingDraftPlan = {
@@ -68,6 +98,8 @@ export type JianyingDraftPlan = {
     trackOrder: string[]
     clips: JianyingDraftDirectorClip[]
   }
+  materialAssets: JianyingDraftMaterialAsset[]
+  brandOverlays: JianyingDraftBrandOverlay[]
   requiredConfirmations: JianyingDraftAction[]
 }
 
@@ -98,6 +130,55 @@ export type CreateJianyingDraftPlanInput = {
   lockedTrackIds?: string[]
   requestedActions?: JianyingDraftAction[]
   confirmedActions?: JianyingDraftAction[]
+  aiDirectorPlan?: JianyingDraftPlan["aiDirector"]
+  materialAssets?: JianyingDraftMaterialAsset[]
+  copywritingBoard?: CopywritingBoardId
+}
+
+export type CreateImageAssetsDraftTimelineInput = {
+  taskId: string
+  shots: Array<
+    Pick<
+      StoryboardShot,
+      "id" | "startMs" | "endMs" | "visualType" | "assetIds"
+    >
+  >
+  assets: Array<Pick<VideoAsset, "id" | "kind" | "tags">>
+  clipDurationMs?: number
+}
+
+export type AiDirectorGenerationRequest = {
+  endpoint: "/api/codex/chat/completions"
+  body: {
+    model: string
+    messages: Array<{ role: "system" | "user"; content: string }>
+    temperature: number
+    apiBaseUrl: string
+    apiKey: string
+    profileId: string
+  }
+  logEntry: {
+    kind: "ai_director_generation_request"
+    profileId: string
+    apiBaseUrl: string
+    model: string
+    timelineClipCount: number
+    apiKey?: never
+  }
+}
+
+export type BuildAiDirectorGenerationRequestInput = {
+  profile: ApiProfileRequestContext
+  script: string
+  timeline: VideoTimeline
+  fallbackPlan: JianyingDraftPlan["aiDirector"]
+  brandOverlays?: JianyingDraftBrandOverlay[]
+  model?: string
+}
+
+export type CreateModelAiDirectorPlanInput = {
+  fallbackPlan: JianyingDraftPlan["aiDirector"]
+  modelText: string
 }
 
 const engineDefinitions: Array<Omit<RenderEngineOption, "status">> = [
@@ -180,6 +261,62 @@ function cleanSegment(value: unknown, fallback: string) {
           .replace(/\s+/g, "-")
       : ""
   return cleaned || fallback
+}
+
+function cleanText(value: unknown, fallback = "") {
+  const text =
+    typeof value === "string" ? value.replace(/\s+/g, " ").trim() : ""
+  return text || fallback
+}
+
+const productBrandOverlayLabels: Array<
+  Pick<JianyingDraftBrandOverlay, "labelId" | "label">
+> = [
+  { labelId: "doubao_icon", label: "豆包图标" },
+  { labelId: "yanling_icon", label: "燕翎图标" },
+  { labelId: "jianying_icon", label: "剪映图标" },
+]
+
+function createBrandOverlays({
+  copywritingBoard,
+  materialAssets,
+}: Pick<
+  CreateJianyingDraftPlanInput,
+  "copywritingBoard" | "materialAssets"
+>): JianyingDraftBrandOverlay[] {
+  if (copywritingBoard !== "product_conversion") return []
+
+  return productBrandOverlayLabels.map(({ labelId, label }) => {
+    const asset = materialAssets?.find(
+      (candidate) =>
+        candidate.kind === "brand_sticker" &&
+        candidate.tags?.includes(labelId)
+    )
+    const tags = asset?.tags?.length ? asset.tags : [labelId]
+
+    if (asset) {
+      return {
+        id: `brand_overlay_${labelId}`,
+        labelId,
+        label,
+        assetId: asset.id,
+        status: "ready",
+        required: false,
+        replacementHint: `使用已导入素材 ${asset.displayName || label} 作为手动品牌贴片。`,
+        tags,
+      }
+    }
+
+    return {
+      id: `brand_overlay_${labelId}_placeholder`,
+      labelId,
+      label,
+      status: "placeholder",
+      required: false,
+      replacementHint: `可在剪映中手动补充${label}贴片，缺失不阻塞草稿。`,
+      tags: [labelId],
+    }
+  })
 }
 
 function formatDraftTimestamp(createdAt?: string) {
@@ -311,6 +448,225 @@ function createDirectorPlan({
   }
 }
 
+function findShotImageAssetId(
+  shot: CreateImageAssetsDraftTimelineInput["shots"][number],
+  assets: CreateImageAssetsDraftTimelineInput["assets"]
+) {
+  const generatedAsset = assets.find(
+    (asset) =>
+      asset.kind === "stickman_image" &&
+      asset.tags?.includes("generated_image") &&
+      asset.tags?.includes(shot.id)
+  )
+  if (generatedAsset) return generatedAsset.id
+
+  return shot.assetIds.find((assetId) =>
+    assets.some((asset) => asset.id === assetId && asset.kind === "stickman_image")
+  )
+}
+
+export function createImageAssetsDraftTimeline({
+  taskId,
+  shots,
+  assets,
+  clipDurationMs = 2000,
+}: CreateImageAssetsDraftTimelineInput): VideoTimeline {
+  const clips = shots
+    .filter((shot) => shot.visualType === "stickman")
+    .map((shot, index) => {
+      const assetId = findShotImageAssetId(shot, assets)
+      if (!assetId) return null
+
+      const originalDuration = Math.max(0, shot.endMs - shot.startMs)
+      const durationMs = originalDuration || Math.max(1000, clipDurationMs)
+      const startMs =
+        originalDuration > 0
+          ? Math.max(0, shot.startMs)
+          : index * Math.max(1000, clipDurationMs)
+
+      return {
+        id: `${shot.id}_visual`,
+        assetId,
+        startMs,
+        durationMs,
+      }
+    })
+    .filter((clip): clip is NonNullable<typeof clip> => Boolean(clip))
+
+  return {
+    taskId,
+    durationMs: clips.reduce(
+      (maxMs, clip) => Math.max(maxMs, clip.startMs + clip.durationMs),
+      0
+    ),
+    tracks: clips.length
+      ? [
+          {
+            id: "visual",
+            type: "visual",
+            clips,
+          },
+        ]
+      : [],
+  }
+}
+
+function parseModelJson(text: string) {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/iu)
+    if (fenced?.[1]) {
+      try {
+        return JSON.parse(fenced[1].trim())
+      } catch {}
+    }
+    const start = trimmed.indexOf("{")
+    const end = trimmed.lastIndexOf("}")
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1))
+      } catch {}
+    }
+  }
+  return null
+}
+
+function normalizeModelZoom(value: unknown, fallback: JianyingDraftDirectorClip["zoom"]) {
+  return value === "none" ||
+    value === "slow_in" ||
+    value === "slow_out" ||
+    value === "fast_in"
+    ? value
+    : fallback
+}
+
+function normalizeModelTransition(value: unknown, fallback?: string) {
+  return cleanText(value, fallback || "soft_cut")
+    .replace(/[^\w.-]+/g, "_")
+    .slice(0, 48)
+}
+
+export function createModelAiDirectorPlan({
+  fallbackPlan,
+  modelText,
+}: CreateModelAiDirectorPlanInput): JianyingDraftPlan["aiDirector"] {
+  const parsed = parseModelJson(modelText)
+  if (!parsed || typeof parsed !== "object") return fallbackPlan
+
+  const rawClips = Array.isArray((parsed as { clips?: unknown }).clips)
+    ? ((parsed as { clips: unknown[] }).clips)
+    : []
+  const modelClipById = new Map(
+    rawClips
+      .filter((clip): clip is Record<string, unknown> =>
+        Boolean(clip && typeof clip === "object" && typeof (clip as { id?: unknown }).id === "string")
+      )
+      .map((clip) => [String(clip.id), clip])
+  )
+  const fallbackTrackIds = new Set(fallbackPlan.trackOrder)
+  const requestedTrackOrder = Array.isArray(
+    (parsed as { trackOrder?: unknown }).trackOrder
+  )
+    ? (parsed as { trackOrder: unknown[] }).trackOrder
+        .map((track) => cleanSegment(track, ""))
+        .filter((track) => fallbackTrackIds.has(track))
+    : []
+
+  return {
+    trackOrder: requestedTrackOrder.length
+      ? requestedTrackOrder
+      : fallbackPlan.trackOrder,
+    clips: fallbackPlan.clips.map((clip) => {
+      const modelClip = modelClipById.get(clip.id)
+      if (!modelClip || clip.locked) return clip
+
+      return {
+        ...clip,
+        transition:
+          clip.type === "visual"
+            ? normalizeModelTransition(modelClip.transition, clip.transition)
+            : clip.transition,
+        zoom:
+          clip.type === "visual"
+            ? normalizeModelZoom(modelClip.zoom, clip.zoom)
+            : clip.zoom,
+        replacementHint: cleanText(
+          modelClip.replacementHint,
+          clip.replacementHint
+        ),
+        emphasisSubtitle:
+          typeof modelClip.emphasisSubtitle === "boolean"
+            ? modelClip.emphasisSubtitle
+            : clip.emphasisSubtitle,
+        text: cleanText(modelClip.text, clip.text),
+      }
+    }),
+  }
+}
+
+export function buildAiDirectorGenerationRequest({
+  profile,
+  script,
+  timeline,
+  fallbackPlan,
+  brandOverlays = [],
+  model = profile.model,
+}: BuildAiDirectorGenerationRequestInput): AiDirectorGenerationRequest {
+  const clipCount = timeline.tracks.reduce(
+    (sum, track) => sum + track.clips.length,
+    0
+  )
+  return {
+    endpoint: "/api/codex/chat/completions",
+    body: {
+      model: cleanText(model, "edit-director-default"),
+      temperature: 0.25,
+      apiBaseUrl: profile.apiBaseUrl,
+      apiKey: profile.apiKey,
+      profileId: profile.profileId,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是短视频 AI 精剪/剪辑决策模型。只返回 JSON，不要 Markdown。根据脚本、VideoTimeline 和已有草稿方案，决定每个可编辑 clip 的 transition、zoom、replacementHint、emphasisSubtitle、text。不得修改 locked=true 的片段。若提供 brandOverlays，只能引用已有贴片素材或手动贴片意图，不得要求图像模型生成 logo、图标或品牌标识。",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            script: cleanText(script),
+            VideoTimeline: timeline,
+            fallbackAiDirector: fallbackPlan,
+            brandOverlays,
+            outputSchema: {
+              trackOrder: ["visual", "subtitle", "voice"],
+              clips: [
+                {
+                  id: "clip id from fallbackAiDirector",
+                  transition: "soft_cut | match_cut | flash_cut | locked",
+                  zoom: "none | slow_in | slow_out | fast_in",
+                  replacementHint: "manual replacement instruction",
+                  emphasisSubtitle: true,
+                  text: "optional subtitle rewrite",
+                },
+              ],
+            },
+          }),
+        },
+      ],
+    },
+    logEntry: {
+      kind: "ai_director_generation_request",
+      profileId: profile.profileId,
+      apiBaseUrl: profile.apiBaseUrl,
+      model: cleanText(model, "edit-director-default"),
+      timelineClipCount: clipCount,
+    },
+  }
+}
+
 function missingConfirmations({
   requestedActions = [],
   confirmedActions = [],
@@ -376,6 +732,9 @@ export function createJianyingDraftPlan({
   lockedTrackIds = [],
   requestedActions = [],
   confirmedActions = [],
+  aiDirectorPlan,
+  materialAssets = [],
+  copywritingBoard = "generic_rewrite",
 }: CreateJianyingDraftPlanInput): JianyingDraftPlan {
   const output = createJianyingDraftAsset(taskId, createdAt)
   const requiredConfirmations = missingConfirmations({
@@ -388,6 +747,10 @@ export function createJianyingDraftPlan({
     : requiredConfirmations.length
       ? "needs_confirmation"
       : "ready"
+  const brandOverlays = createBrandOverlays({
+    copywritingBoard,
+    materialAssets,
+  })
 
   return {
     taskId,
@@ -406,11 +769,15 @@ export function createJianyingDraftPlan({
         : status === "needs_confirmation"
           ? `需要用户确认：${requiredConfirmations.join("、")}`
           : "剪映可编辑草稿计划已准备，默认不会导出 MP4。",
-    aiDirector: createDirectorPlan({
-      timeline,
-      lockedShotIds,
-      lockedTrackIds,
-    }),
+    aiDirector:
+      aiDirectorPlan ||
+      createDirectorPlan({
+        timeline,
+        lockedShotIds,
+        lockedTrackIds,
+      }),
+    materialAssets,
+    brandOverlays,
     requiredConfirmations,
   }
 }
