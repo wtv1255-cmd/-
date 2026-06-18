@@ -1,0 +1,16 @@
+## REVIEW-01
+- Source doc: docs/superpowers/specs/2026-06-18-ta-huo-video-factory-phase2-design.md
+- Review agent: same-model sub-agent
+- Scope checked: source-state cleanup, installed-package evidence, 7-module quiet UI, original/A/B/C workflow, per-module failover, TTS external path/no bundled model, subtitle/timeline behavior, Jianying draft primary output, safe recovery policy, destructive confirmations, user manual
+- Evidence checked: commits d54c537, 6cf2e60, c1ee58e, b716b84; node --test 79 tests; pnpm build; pnpm desktop:build; Playwright screenshots/spec logs; CSV notes and status rows
+- Claim/evidence alignment: mismatches found
+- Limited validation honestly reported: yes
+- Result: gaps_found
+- Gaps:
+  - FOLLOW-01: Runtime API failover is still a contract-only capability in places that call text/image/video APIs; actual live call paths do not yet route through ordered backup profiles for all AI modules.
+  - FOLLOW-02: Recovery planning is persisted and visible, but safe auto-resume is not yet executed after task restore; the UI records the plan instead of driving the queued resume steps.
+  - FOLLOW-03: Final installed-app E2E evidence is still limited by unavailable signed production license and absent computer-use tooling; the package/build evidence is real, but not the full post-activation clickthrough.
+- Follow-up issues added: FOLLOW-01, FOLLOW-02, FOLLOW-03, REVIEW-02
+- Assumptions: none
+- Decision debt: installed post-activation workflow remains limited to build/package inspection plus dev UI evidence
+- Human-required blockers: signed production video_factory license and computer-use tool access are unavailable for full installed post-activation clickthrough
