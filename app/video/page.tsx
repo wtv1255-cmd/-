@@ -140,6 +140,28 @@ const sourceModeLabels: Record<ViralSourceCollectionMode, string> = {
   stable_7d: "近 7 天稳态爆款",
 }
 
+type VideoFactoryModuleId =
+  | "overview"
+  | "script"
+  | "storyboard"
+  | "assets"
+  | "voice"
+  | "draft"
+  | "settings"
+
+const videoFactoryModules: Array<{
+  id: VideoFactoryModuleId
+  label: string
+}> = [
+  { id: "overview", label: "任务总览" },
+  { id: "script", label: "文案" },
+  { id: "storyboard", label: "分镜" },
+  { id: "assets", label: "素材" },
+  { id: "voice", label: "配音字幕" },
+  { id: "draft", label: "剪辑草稿" },
+  { id: "settings", label: "设置" },
+]
+
 export default function VideoFactoryPage() {
   return (
     <LicenseGate feature="video_factory" title="视频工厂">
@@ -150,6 +172,8 @@ export default function VideoFactoryPage() {
 
 function VideoFactoryShell() {
   const license = useLicenseVerification()
+  const [activeModule, setActiveModule] =
+    useState<VideoFactoryModuleId>("overview")
   const [tasks, setTasks] = useState<VideoTask[]>([])
   const [activeTaskId, setActiveTaskId] = useState("")
   const [apiProfiles, setApiProfiles] = useState<ApiProfileStore>(
@@ -1196,147 +1220,170 @@ function VideoFactoryShell() {
       <div className="mx-auto grid max-w-7xl gap-5 p-6 max-lg:p-4">
         <section className="grid grid-cols-[minmax(0,1fr)_340px] gap-5 max-xl:grid-cols-1">
           <div className="grid gap-5">
-            <div className="rounded-lg border bg-background p-5">
-              <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h1 className="text-2xl font-semibold tracking-normal">
-                    视频工厂任务
-                  </h1>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                    独立管理单条视频任务，按爆款来源、脚本、套餐、分镜、素材、配音、剪辑、发布和记录推进。
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={saveCurrentProgress}>
-                    <Save className="size-4" />
-                    保存进度
-                  </Button>
-                  <Button onClick={createTask}>
-                    <Sparkles className="size-4" />
-                    新建任务
-                  </Button>
-                </div>
-              </div>
+            <VideoFactoryModuleNav
+              activeModule={activeModule}
+              onChange={setActiveModule}
+            />
 
-              <div className="grid gap-4">
-                <TaskList
-                  tasks={tasks}
-                  activeTaskId={activeTask?.id || ""}
-                  onSelectTask={setActiveTaskId}
-                  onCreateTask={createTask}
+            {activeModule === "overview" ? (
+              <>
+                <div className="rounded-lg border bg-background p-5">
+                  <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h1 className="text-2xl font-semibold tracking-normal">
+                        视频工厂任务
+                      </h1>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                        单条任务从来源、脚本、分镜、素材到剪映草稿分模块推进。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={saveCurrentProgress}>
+                        <Save className="size-4" />
+                        保存进度
+                      </Button>
+                      <Button onClick={createTask}>
+                        <Sparkles className="size-4" />
+                        新建任务
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4">
+                    <TaskList
+                      tasks={tasks}
+                      activeTaskId={activeTask?.id || ""}
+                      onSelectTask={setActiveTaskId}
+                      onCreateTask={createTask}
+                    />
+                    {activeTask ? (
+                      <WorkflowShell task={activeTask} />
+                    ) : (
+                      <EmptyTaskShell onCreateTask={createTask} />
+                    )}
+                  </div>
+                </div>
+
+                <SourceCollectionPanel
+                  keyword={sourceKeyword}
+                  mode={sourceMode}
+                  candidates={sourceCandidates}
+                  status={sourceStatus}
+                  isCollecting={isCollectingSources}
+                  douyinUrl={manualDouyinUrl}
+                  localUploadName={localUploadName}
+                  onKeywordChange={setSourceKeyword}
+                  onModeChange={setSourceMode}
+                  onCollect={collectSources}
+                  onSelectCandidate={selectSourceCandidate}
+                  onDouyinUrlChange={setManualDouyinUrl}
+                  onImportDouyinLink={importDouyinLink}
+                  onLocalUploadNameChange={setLocalUploadName}
+                  onImportLocalUpload={importLocalUpload}
                 />
-                {activeTask ? (
-                  <WorkflowShell task={activeTask} />
-                ) : (
-                  <EmptyTaskShell onCreateTask={createTask} />
-                )}
-              </div>
-            </div>
+              </>
+            ) : null}
 
-            <SourceCollectionPanel
-              keyword={sourceKeyword}
-              mode={sourceMode}
-              candidates={sourceCandidates}
-              status={sourceStatus}
-              isCollecting={isCollectingSources}
-              douyinUrl={manualDouyinUrl}
-              localUploadName={localUploadName}
-              onKeywordChange={setSourceKeyword}
-              onModeChange={setSourceMode}
-              onCollect={collectSources}
-              onSelectCandidate={selectSourceCandidate}
-              onDouyinUrlChange={setManualDouyinUrl}
-              onImportDouyinLink={importDouyinLink}
-              onLocalUploadNameChange={setLocalUploadName}
-              onImportLocalUpload={importLocalUpload}
-            />
+            {activeModule === "script" ? (
+              <ScriptAnalysisPanel
+                topic={analysisTopic}
+                draft={analysisDraft}
+                generating={isGeneratingAnalysis}
+                onTopicChange={setAnalysisTopic}
+                onGenerateDraft={generateAnalysisDraft}
+                onScriptChange={(value) => {
+                  setAnalysisDraft((current) =>
+                    current ? { ...current, originalScript: value } : current
+                  )
+                  updateActiveTaskSnapshot((snapshot) => ({
+                    ...snapshot,
+                    source: {
+                      ...snapshot.source,
+                      userTopic: analysisTopic,
+                    },
+                    voice: {
+                      ...snapshot.voice,
+                      text: value,
+                    },
+                  }))
+                }}
+              />
+            ) : null}
 
-            <ScriptAnalysisPanel
-              topic={analysisTopic}
-              draft={analysisDraft}
-              generating={isGeneratingAnalysis}
-              onTopicChange={setAnalysisTopic}
-              onGenerateDraft={generateAnalysisDraft}
-              onScriptChange={(value) => {
-                setAnalysisDraft((current) =>
-                  current ? { ...current, originalScript: value } : current
-                )
-                updateActiveTaskSnapshot((snapshot) => ({
-                  ...snapshot,
-                  source: {
-                    ...snapshot.source,
-                    userTopic: analysisTopic,
-                  },
-                  voice: {
-                    ...snapshot.voice,
-                    text: value,
-                  },
-                }))
-              }}
-            />
+            {activeModule === "storyboard" ? (
+              <StoryboardPanel
+                selectedPackages={selectedPackages}
+                selectedDuration={selectedDuration}
+                shots={storyboardShots}
+                onTogglePackage={togglePackage}
+                onDurationChange={setSelectedDuration}
+                onGenerateStoryboard={generateStoryboard}
+                onUpdateShot={updateStoryboardShot}
+              />
+            ) : null}
 
-            <StoryboardPanel
-              selectedPackages={selectedPackages}
-              selectedDuration={selectedDuration}
-              shots={storyboardShots}
-              onTogglePackage={togglePackage}
-              onDurationChange={setSelectedDuration}
-              onGenerateStoryboard={generateStoryboard}
-              onUpdateShot={updateStoryboardShot}
-            />
+            {activeModule === "assets" ? (
+              <VideoAssetLibraryPanel
+                assets={videoAssets}
+                generatingStickman={isGeneratingStickmanImages}
+                stickmanProgress={stickmanProgress}
+                stickmanShotCount={stickmanShotCount}
+                generatedStickmanShotCount={generatedStickmanShotCount}
+                importKind={assetImportKind}
+                importName={assetImportName}
+                onGenerateStickman={generateStickmanAsset}
+                onStopStickman={stopStickmanGeneration}
+                onImportKindChange={setAssetImportKind}
+                onImportNameChange={setAssetImportName}
+                onImportAsset={importVideoAsset}
+                onRemoveAsset={removeVideoAsset}
+              />
+            ) : null}
 
-            <VideoAssetLibraryPanel
-              assets={videoAssets}
-              generatingStickman={isGeneratingStickmanImages}
-              stickmanProgress={stickmanProgress}
-              stickmanShotCount={stickmanShotCount}
-              generatedStickmanShotCount={generatedStickmanShotCount}
-              importKind={assetImportKind}
-              importName={assetImportName}
-              onGenerateStickman={generateStickmanAsset}
-              onStopStickman={stopStickmanGeneration}
-              onImportKindChange={setAssetImportKind}
-              onImportNameChange={setAssetImportName}
-              onImportAsset={importVideoAsset}
-              onRemoveAsset={removeVideoAsset}
-            />
+            {activeModule === "voice" ? (
+              <TimelineAssemblyPanel
+                voice={voicePlan}
+                timeline={videoTimeline}
+                storyboardCount={storyboardShots.length}
+                assetCount={videoAssets.length}
+                ttsSettings={ttsSettings}
+                ttsStatus={ttsStatus}
+                onAssembleTimeline={assembleTimeline}
+                onSaveTtsSettings={saveTtsSettings}
+                onCheckTtsSettings={checkTtsSettings}
+              />
+            ) : null}
 
-            <TimelineAssemblyPanel
-              voice={voicePlan}
-              timeline={videoTimeline}
-              storyboardCount={storyboardShots.length}
-              assetCount={videoAssets.length}
-              ttsSettings={ttsSettings}
-              ttsStatus={ttsStatus}
-              onAssembleTimeline={assembleTimeline}
-              onSaveTtsSettings={saveTtsSettings}
-              onCheckTtsSettings={checkTtsSettings}
-            />
+            {activeModule === "draft" ? (
+              <>
+                <RenderExportPanel
+                  engines={renderEngines}
+                  requestedEngine={requestedRenderEngine}
+                  plan={renderPlan}
+                  hasTimeline={Boolean(videoTimeline?.tracks.length)}
+                  onEngineChange={setRequestedRenderEngine}
+                  onPrepareExport={prepareRenderExport}
+                />
 
-            <RenderExportPanel
-              engines={renderEngines}
-              requestedEngine={requestedRenderEngine}
-              plan={renderPlan}
-              hasTimeline={Boolean(videoTimeline?.tracks.length)}
-              onEngineChange={setRequestedRenderEngine}
-              onPrepareExport={prepareRenderExport}
-            />
+                <PublishPanel
+                  draft={publishDraft}
+                  autoPublishEnabled={autoPublishEnabled}
+                  onGenerateDraft={generateDraft}
+                  onUpdateDraft={updateDraft}
+                  onUpdateAccount={updateAccount}
+                  onConfirmPublish={confirmPublish}
+                  onRiskPause={simulateRiskPause}
+                />
+              </>
+            ) : null}
 
-            <PublishPanel
-              draft={publishDraft}
-              autoPublishEnabled={autoPublishEnabled}
-              onGenerateDraft={generateDraft}
-              onUpdateDraft={updateDraft}
-              onUpdateAccount={updateAccount}
-              onConfirmPublish={confirmPublish}
-              onRiskPause={simulateRiskPause}
-            />
-
-            <ApiProfilesPanel
-              store={apiProfiles}
-              onSaveProfile={saveApiProfile}
-              onSelectProfile={selectApiProfile}
-            />
+            {activeModule === "settings" ? (
+              <ApiProfilesPanel
+                store={apiProfiles}
+                onSaveProfile={saveApiProfile}
+                onSelectProfile={selectApiProfile}
+              />
+            ) : null}
           </div>
 
           <aside className="grid content-start gap-4">
@@ -1360,6 +1407,42 @@ function VideoFactoryShell() {
         </div>
       ) : null}
     </main>
+  )
+}
+
+function VideoFactoryModuleNav({
+  activeModule,
+  onChange,
+}: {
+  activeModule: VideoFactoryModuleId
+  onChange: (moduleId: VideoFactoryModuleId) => void
+}) {
+  return (
+    <nav
+      aria-label="视频工厂模块"
+      className="rounded-lg border bg-background p-2"
+    >
+      <div className="grid grid-cols-7 gap-1 max-xl:grid-cols-4 max-sm:grid-cols-2">
+        {videoFactoryModules.map((module) => {
+          const active = activeModule === module.id
+          return (
+            <button
+              key={module.id}
+              type="button"
+              aria-current={active ? "page" : undefined}
+              className={`min-h-10 rounded-md px-3 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 ${
+                active
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+              onClick={() => onChange(module.id)}
+            >
+              {module.label}
+            </button>
+          )
+        })}
+      </div>
+    </nav>
   )
 }
 
