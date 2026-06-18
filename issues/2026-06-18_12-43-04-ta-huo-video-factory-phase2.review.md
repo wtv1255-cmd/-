@@ -30,3 +30,21 @@
 - Assumptions: video_parsing and publish_helper profile groups exist as configuration contracts, but no separate external runtime call path is currently implemented in the app.
 - Decision debt: production provider failover and installed post-activation clickthrough still require valid license/API credentials and desktop control.
 - Human-required blockers: valid production video_factory license, real API credentials/provider control, and desktop control remain required for full installed post-activation/provider failover clickthrough.
+
+## REVIEW-03
+- Source doc: docs/superpowers/specs/2026-06-18-ta-huo-video-factory-phase2-design.md
+- Review agent: same-model sub-agent `Ampere` (`019eda64-aa91-7930-93db-de52c84708bd`)
+- Scope checked: FOLLOW-04/FOLLOW-05 scope fixes, CSV claim/evidence alignment, user manual/evidence wording, runtime failover scope, recovery execution, evidence archive, and remaining limited validations.
+- Evidence checked: commits `3bd0488`, `8d842ae`, `ed5a608`, `a3dd3de`, `163bae5`; `app/video/page.tsx`; `lib/api-profiles.ts`; `lib/video-task.ts`; `docs/video-factory-phase2-user-manual.md`; `docs/video-factory-phase2-validation-evidence.md`; current CSV and review log; `node --test tests/api-profiles.test.mjs tests/video-task.test.mjs tests/video-factory-modules.test.mjs`; targeted `rg` scope checks; `pnpm tsc --noEmit`; relevant ESLint; Playwright evidence `artifacts/review03-final-api-scope.json`.
+- Claim/evidence alignment: mismatches found
+- Limited validation honestly reported: yes
+- Result: gaps_found
+- Gaps:
+  - FOLLOW-06: Older completed CSV rows `SPEC-05` and `FOLLOW-01` still contain broad failover wording for parsing / AI director. Mark those historical claims as superseded by the scoped text/image runtime failover result, or implement real external parsing/director runtime failover.
+  - FOLLOW-06: User manual and evidence archive mention video parsing / publish helper reservation but do not explicitly state that AI director is local structured draft planning with no verified external provider failover.
+- Follow-up issues added: FOLLOW-06, REVIEW-04
+- Assumptions:
+  - `video_parsing`, `publish_helper`, and AI director profile groups remain configuration/future integration concepts unless a concrete external runtime call path is added and tested.
+- Decision debt:
+  - Production provider failover and installed post-activation clickthrough still require a valid production `video_factory` license, real API credentials/provider control, and desktop control.
+- Human-required blockers: none for FOLLOW-06/REVIEW-04; production license/API credentials/desktop control remain limited validation for installed/provider E2E and cannot be used as proof of those paths.
