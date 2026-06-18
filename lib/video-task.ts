@@ -43,6 +43,22 @@ export type VideoProductionStepId =
   | "overwrite"
   | "manual_edit_replace"
 
+const VIDEO_PRODUCTION_STEP_ID_VALUES: VideoProductionStepId[] = [
+  "source",
+  "script",
+  "storyboard",
+  "images",
+  "tts",
+  "subtitles",
+  "timeline",
+  "draft",
+  "publish",
+  "upload",
+  "delete",
+  "overwrite",
+  "manual_edit_replace",
+]
+
 export type VideoProductionStep = {
   id: VideoProductionStepId
   state: VideoProductionStepState
@@ -83,6 +99,19 @@ export type VideoTaskRecoveryPlan = {
   requiresUserConfirmation: boolean
 }
 
+export type ExecuteVideoTaskRecoveryInput = {
+  runStep: (
+    step: VideoProductionStep
+  ) => Promise<{ ok: boolean; assetIds?: string[]; reason?: string }>
+}
+
+export type VideoTaskRecoveryExecutionResult = VideoTaskRecoveryPlan & {
+  completedStepIds: VideoProductionStepId[]
+  failedStepIds: VideoProductionStepId[]
+  pendingStepIds: VideoProductionStepId[]
+  skippedStepIds: VideoProductionStepId[]
+}
+
 export type VideoTask = {
   id: string
   title: string
@@ -91,6 +120,7 @@ export type VideoTask = {
   updatedAt: string
   workflow: VideoWorkflowStep[]
   snapshotKey?: string
+  recovery?: VideoTaskRecoveryExecutionResult
 }
 
 export type CreateVideoTaskInput = {
@@ -282,6 +312,65 @@ export function planVideoTaskRecovery(
   }
 }
 
+export async function executeVideoTaskRecovery(
+  plan: VideoTaskRecoveryPlan,
+  input: ExecuteVideoTaskRecoveryInput
+): Promise<VideoTaskRecoveryExecutionResult> {
+  const completedStepIds: VideoProductionStepId[] = []
+  const failedStepIds: VideoProductionStepId[] = []
+  const pendingStepIds: VideoProductionStepId[] = []
+  const skippedStepIds = plan.steps
+    .filter(
+      (step) =>
+        step.state === "success" ||
+        step.state === "needs_manual" ||
+        !plan.autoResumeStepIds.includes(step.id)
+    )
+    .map((step) => step.id)
+  const nextSteps = plan.steps.map((step) => ({ ...step }))
+
+  for (const stepId of plan.autoResumeStepIds) {
+    if (failedStepIds.length) {
+      pendingStepIds.push(stepId)
+      continue
+    }
+
+    const step = nextSteps.find((item) => item.id === stepId)
+    if (!step || step.state === "success" || step.state === "needs_manual") {
+      if (step) skippedStepIds.push(step.id)
+      continue
+    }
+
+    step.state = "running"
+    const result = await input.runStep(step)
+    if (result.ok) {
+      step.state = "success"
+      step.reason = undefined
+      step.assetIds = result.assetIds || step.assetIds
+      step.shouldRegenerate = false
+      completedStepIds.push(step.id)
+      continue
+    }
+
+    step.state = "failed"
+    step.reason = result.reason || "recovery step failed"
+    failedStepIds.push(step.id)
+  }
+
+  return {
+    ...plan,
+    taskStatus: failedStepIds.length || plan.requiresUserConfirmation
+      ? "paused"
+      : "in_progress",
+    steps: nextSteps,
+    preservedAssetIds: Array.from(new Set(plan.preservedAssetIds)),
+    completedStepIds,
+    failedStepIds,
+    pendingStepIds,
+    skippedStepIds: Array.from(new Set(skippedStepIds)),
+  }
+}
+
 export function createVideoTask(input: CreateVideoTaskInput = {}): VideoTask {
   const at = nowIso(input.now)
   return {
@@ -296,6 +385,7 @@ export function createVideoTask(input: CreateVideoTaskInput = {}): VideoTask {
 }
 
 export function sanitizeVideoTask(task: VideoTask): VideoTask {
+  const recovery = sanitizeVideoTaskRecovery(task.recovery)
   return {
     id: String(task.id || `video_${Date.now()}`),
     title: normalizeTitle(task.title),
@@ -320,7 +410,54 @@ export function sanitizeVideoTask(task: VideoTask): VideoTask {
                 : "locked",
           }))
         : createWorkflow(),
+    ...(recovery ? { recovery } : {}),
   }
+}
+
+function sanitizeVideoTaskRecovery(
+  recovery: VideoTask["recovery"] | undefined
+): VideoTaskRecoveryExecutionResult | undefined {
+  if (!recovery || typeof recovery !== "object") return undefined
+
+  const steps = Array.isArray(recovery.steps)
+    ? recovery.steps
+        .filter((step) => step && typeof step.id === "string")
+        .map((step) => ({ ...step }))
+    : []
+
+  return {
+    taskId: String(recovery.taskId || ""),
+    taskStatus:
+      recovery.taskStatus === "draft" ||
+      recovery.taskStatus === "in_progress" ||
+      recovery.taskStatus === "paused" ||
+      recovery.taskStatus === "exported"
+        ? recovery.taskStatus
+        : "paused",
+    steps,
+    autoResumeStepIds: sanitizeStepIds(recovery.autoResumeStepIds),
+    manualStepIds: sanitizeStepIds(recovery.manualStepIds),
+    preservedAssetIds: sanitizeStringList(recovery.preservedAssetIds),
+    pauseReasons: sanitizeStringList(recovery.pauseReasons),
+    requiresUserConfirmation: Boolean(recovery.requiresUserConfirmation),
+    completedStepIds: sanitizeStepIds(recovery.completedStepIds),
+    failedStepIds: sanitizeStepIds(recovery.failedStepIds),
+    pendingStepIds: sanitizeStepIds(recovery.pendingStepIds),
+    skippedStepIds: sanitizeStepIds(recovery.skippedStepIds),
+  }
+}
+
+function sanitizeStepIds(ids: unknown): VideoProductionStepId[] {
+  const validIds = new Set(VIDEO_PRODUCTION_STEP_ID_VALUES)
+  return Array.isArray(ids)
+    ? ids.filter((id): id is VideoProductionStepId => validIds.has(id as VideoProductionStepId))
+    : []
+}
+
+function sanitizeStringList(items: unknown): string[] {
+  return Array.isArray(items)
+    ? items.filter((item): item is string => typeof item === "string")
+    : []
 }
 
 export function saveVideoTasks(

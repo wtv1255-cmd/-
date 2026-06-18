@@ -91,6 +91,44 @@ test("video task list persistence sanitizes user visible task state", async () =
   assert.equal(readVideoTasks(browserStorage)[0].workflow.length, 9)
 })
 
+test("video task list persistence keeps recovery execution summary", async () => {
+  const {
+    createVideoTask,
+    saveVideoTasks,
+    readVideoTasks,
+  } = await importTaskModule()
+  const storage = new Map()
+  const browserStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+  }
+  const task = createVideoTask({ title: "恢复续跑" })
+  task.recovery = {
+    taskId: task.id,
+    taskStatus: "paused",
+    steps: [
+      { id: "images", state: "success", assetIds: ["img_01"] },
+      { id: "tts", state: "failed", reason: "local tts unavailable" },
+    ],
+    autoResumeStepIds: ["tts"],
+    manualStepIds: [],
+    preservedAssetIds: ["img_01"],
+    pauseReasons: ["local tts unavailable"],
+    requiresUserConfirmation: false,
+    completedStepIds: [],
+    failedStepIds: ["tts"],
+    pendingStepIds: [],
+    skippedStepIds: ["images"],
+  }
+
+  saveVideoTasks([task], browserStorage)
+
+  const [restored] = readVideoTasks(browserStorage)
+  assert.equal(restored.recovery.taskId, task.id)
+  assert.deepEqual(restored.recovery.failedStepIds, ["tts"])
+  assert.deepEqual(restored.recovery.preservedAssetIds, ["img_01"])
+})
+
 test("production step recovery auto-resumes safe failed work and preserves successful assets", async () => {
   const {
     createVideoRecoverySnapshot,
@@ -177,4 +215,74 @@ test("destructive recovery actions require manual confirmation", async () => {
     "manual_edit_replace",
   ])
   assert.equal(recovery.taskStatus, "paused")
+})
+
+test("recovery executor runs only safe auto-resume steps and skips preserved assets", async () => {
+  const {
+    createVideoRecoverySnapshot,
+    planVideoTaskRecovery,
+    executeVideoTaskRecovery,
+  } = await importTaskModule()
+  const snapshot = createVideoRecoverySnapshot({
+    taskId: "task_recover",
+    steps: [
+      { id: "images", state: "success", assetIds: ["img_01"] },
+      { id: "tts", state: "failed", reason: "transient local tts failure" },
+      { id: "subtitles", state: "waiting" },
+      { id: "publish", state: "waiting" },
+    ],
+  })
+  const recovery = planVideoTaskRecovery(snapshot, {
+    hasApiBackup: true,
+    localTtsAvailable: true,
+  })
+  const calls = []
+  const result = await executeVideoTaskRecovery(recovery, {
+    runStep: async (step) => {
+      calls.push(step.id)
+      return { ok: true, assetIds: [`${step.id}_asset`] }
+    },
+  })
+
+  assert.deepEqual(calls, ["tts", "subtitles"])
+  assert.deepEqual(result.completedStepIds, ["tts", "subtitles"])
+  assert.deepEqual(result.skippedStepIds, ["images", "publish"])
+  assert.deepEqual(result.preservedAssetIds, ["img_01"])
+  assert.equal(
+    result.steps.find((step) => step.id === "tts").state,
+    "success"
+  )
+  assert.equal(
+    result.steps.find((step) => step.id === "publish").state,
+    "needs_manual"
+  )
+})
+
+test("recovery executor pauses remaining safe steps after a resume failure", async () => {
+  const {
+    createVideoRecoverySnapshot,
+    planVideoTaskRecovery,
+    executeVideoTaskRecovery,
+  } = await importTaskModule()
+  const recovery = planVideoTaskRecovery(
+    createVideoRecoverySnapshot({
+      taskId: "task_recover",
+      steps: [
+        { id: "tts", state: "failed" },
+        { id: "subtitles", state: "waiting" },
+      ],
+    }),
+    { hasApiBackup: true, localTtsAvailable: true }
+  )
+  const result = await executeVideoTaskRecovery(recovery, {
+    runStep: async (step) => ({
+      ok: step.id !== "tts",
+      reason: "tts still unavailable",
+    }),
+  })
+
+  assert.deepEqual(result.completedStepIds, [])
+  assert.deepEqual(result.failedStepIds, ["tts"])
+  assert.deepEqual(result.pendingStepIds, ["subtitles"])
+  assert.equal(result.taskStatus, "paused")
 })

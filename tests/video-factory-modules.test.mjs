@@ -96,7 +96,10 @@ test("video factory records recovery strategy for resumable task state", async (
   const source = await readVideoPage()
 
   assert.match(source, /createRecoveryPlanFromSnapshot/)
+  assert.match(source, /executeVideoTaskRecovery/)
   assert.match(source, /planVideoTaskRecovery/)
   assert.match(source, /recovery_plan/)
-  assert.match(source, /恢复策略：自动续跑/)
+  assert.match(source, /恢复策略：已续跑/)
+  assert.match(source, /恢复摘要/)
+  assert.match(source, /completedStepIds\.length/)
 })

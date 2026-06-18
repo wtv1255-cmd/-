@@ -39,10 +39,12 @@ import { hasLicenseFeature } from "@/lib/licensing"
 import {
   createVideoTask,
   createVideoRecoverySnapshot,
+  executeVideoTaskRecovery,
   planVideoTaskRecovery,
   readVideoTasks,
   saveVideoTasks,
   type VideoTask,
+  type VideoProductionStep,
   type VideoWorkflowStepState,
 } from "@/lib/video-task"
 import {
@@ -223,6 +225,47 @@ function createRecoveryPlanFromSnapshot(snapshot: VideoTaskSnapshot) {
   })
 }
 
+async function runRecoveryStepFromSnapshot(
+  snapshot: VideoTaskSnapshot,
+  step: VideoProductionStep
+) {
+  if (step.id === "tts") {
+    return snapshot.voice.audio
+      ? { ok: true, assetIds: [snapshot.voice.audio.id] }
+      : { ok: false, reason: "local_tts_unavailable" }
+  }
+  if (step.id === "subtitles") {
+    return snapshot.voice.subtitles.length
+      ? { ok: true, assetIds: snapshot.voice.subtitles.map((cue) => cue.id) }
+      : { ok: false, reason: "subtitle_cues_missing" }
+  }
+  if (step.id === "timeline") {
+    return snapshot.timeline.tracks.length
+      ? { ok: true, assetIds: snapshot.timeline.tracks.map((track) => track.id) }
+      : { ok: false, reason: "timeline_missing" }
+  }
+  if (step.id === "draft") {
+    const draftAssetIds = snapshot.assets
+      .filter((asset) => asset.kind === "jianying_draft")
+      .map((asset) => asset.id)
+
+    return draftAssetIds.length
+      ? { ok: true, assetIds: draftAssetIds }
+      : { ok: false, reason: "jianying_draft_missing" }
+  }
+  if (step.id === "images") {
+    const imageAssetIds = snapshot.assets
+      .filter((asset) => asset.kind === "stickman_image")
+      .map((asset) => asset.id)
+
+    return imageAssetIds.length
+      ? { ok: true, assetIds: imageAssetIds }
+      : { ok: false, reason: "image_assets_missing" }
+  }
+
+  return { ok: false, reason: "manual_confirmation_required" }
+}
+
 function inferRequiredMaterialLabel(
   shot: Pick<StoryboardShot, "id" | "voiceText" | "visualDescription" | "prompt">
 ): ExternalMaterialLabelId | undefined {
@@ -344,7 +387,7 @@ function VideoFactoryShell() {
 
   useEffect(() => {
     let alive = true
-    Promise.resolve().then(() => {
+    Promise.resolve().then(async () => {
       if (!alive) return
       try {
         setPublishDraft(readPublishDraft())
@@ -381,7 +424,7 @@ function VideoFactoryShell() {
 
   useEffect(() => {
     let alive = true
-    Promise.resolve().then(() => {
+    Promise.resolve().then(async () => {
       if (!alive) return
       if (!activeTask?.id) {
         setAnalysisDraft(null)
@@ -395,7 +438,11 @@ function VideoFactoryShell() {
         return
       }
       const snapshot = readVideoTaskSnapshot(activeTask.id)
-      const recovery = snapshot ? createRecoveryPlanFromSnapshot(snapshot) : null
+      const recovery = snapshot
+        ? await executeVideoTaskRecovery(createRecoveryPlanFromSnapshot(snapshot), {
+            runStep: (step) => runRecoveryStepFromSnapshot(snapshot, step),
+          })
+        : null
       if (snapshot?.source.userTopic) {
         setAnalysisTopic(snapshot.source.userTopic)
       }
@@ -436,9 +483,24 @@ function VideoFactoryShell() {
           : null
       )
       if (snapshot && recovery) {
+        const recoveryTaskStatus = recovery.taskStatus
+        setTasks((currentTasks) => {
+          const nextTasks = currentTasks.map((task) =>
+            task.id === activeTask.id
+              ? {
+                  ...task,
+                  status: recoveryTaskStatus,
+                  recovery,
+                  updatedAt: new Date().toISOString(),
+                }
+              : task
+          )
+          saveVideoTasks(nextTasks)
+          return nextTasks
+        })
         saveVideoTaskSnapshot({
           ...snapshot,
-          status: recovery.taskStatus,
+          status: recoveryTaskStatus,
           recovery,
           records: [
             ...snapshot.records.filter(
@@ -448,7 +510,7 @@ function VideoFactoryShell() {
               id: `recovery_${Date.now()}`,
               at: new Date().toISOString(),
               kind: "recovery_plan",
-              message: `恢复策略：自动续跑 ${recovery.autoResumeStepIds.join(",") || "无"}；需人工 ${recovery.manualStepIds.join(",") || "无"}；保留素材 ${recovery.preservedAssetIds.length} 个。`,
+              message: `恢复策略：已续跑 ${recovery.completedStepIds.join(",") || "无"}；失败 ${recovery.failedStepIds.join(",") || "无"}；待处理 ${recovery.pendingStepIds.join(",") || "无"}；需人工 ${recovery.manualStepIds.join(",") || "无"}；保留素材 ${recovery.preservedAssetIds.length} 个。`,
             },
           ],
         })
@@ -1886,6 +1948,8 @@ function EmptyTaskShell({ onCreateTask }: { onCreateTask: () => void }) {
 }
 
 function WorkflowShell({ task }: { task: VideoTask }) {
+  const recovery = task.recovery
+
   return (
     <section className="rounded-lg border bg-background p-4">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1899,6 +1963,24 @@ function WorkflowShell({ task }: { task: VideoTask }) {
           状态：{task.status}
         </span>
       </div>
+
+      {recovery ? (
+        <div className="mb-4 grid gap-3 rounded-lg border bg-muted/25 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium">恢复摘要</div>
+            <span className="rounded-md border bg-background px-2 py-0.5 text-xs text-muted-foreground">
+              {recovery.requiresUserConfirmation ? "等待确认" : "安全续跑"}
+            </span>
+          </div>
+          <div className="grid grid-cols-5 gap-2 text-xs text-muted-foreground max-lg:grid-cols-3 max-sm:grid-cols-2">
+            <span>已续跑 {recovery.completedStepIds.length}</span>
+            <span>失败 {recovery.failedStepIds.length}</span>
+            <span>待处理 {recovery.pendingStepIds.length}</span>
+            <span>需人工 {recovery.manualStepIds.length}</span>
+            <span>保留素材 {recovery.preservedAssetIds.length}</span>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-3 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
         {task.workflow.map((step, index) => (
