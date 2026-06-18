@@ -23,6 +23,7 @@ export type VideoAssetKind =
   | "stickman_image"
   | "yanling_clip"
   | "showcase_clip"
+  | "brand_sticker"
   | "cover_image"
   | "voice_audio"
   | "subtitle_file"

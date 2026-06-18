@@ -13,6 +13,10 @@ async function readVideoPage() {
   return readFile(path.join(projectRoot, "app", "video", "page.tsx"), "utf8")
 }
 
+async function readVideoAssets() {
+  return readFile(path.join(projectRoot, "lib", "video-assets.ts"), "utf8")
+}
+
 test("video factory uses seven top modules instead of one long wall", async () => {
   const source = await readVideoPage()
   const labels = [
@@ -100,6 +104,22 @@ test("asset module exposes manual external material labels and timeline placehol
   assert.match(source, /onAssetLabelsChange/)
   assert.match(source, /requiredMaterialLabel/)
   assert.match(source, /externalAssets/)
+})
+
+test("asset module exposes optional product icon brand sticker labels", async () => {
+  const pageSource = await readVideoPage()
+  const assetSource = await readVideoAssets()
+
+  assert.match(pageSource, /VIDEO_ASSET_CATEGORY_OPTIONS\.map/)
+  assert.match(pageSource, /EXTERNAL_MATERIAL_LABEL_OPTIONS\.map/)
+  assert.match(assetSource, /brand_sticker/)
+  assert.match(assetSource, /品牌贴片/)
+  assert.match(assetSource, /doubao_icon/)
+  assert.match(assetSource, /豆包图标/)
+  assert.match(assetSource, /yanling_icon/)
+  assert.match(assetSource, /炎灵图标/)
+  assert.match(assetSource, /jianying_icon/)
+  assert.match(assetSource, /剪映图标/)
 })
 
 test("voice module exposes local tts voice presets and manual audio fallback", async () => {

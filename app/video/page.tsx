@@ -1419,7 +1419,8 @@ function VideoFactoryShell() {
       mimeType:
         assetImportKind === "bgm" || assetImportKind === "sfx"
           ? "audio/mpeg"
-          : assetImportKind.includes("image")
+          : assetImportKind === "brand_sticker" ||
+              assetImportKind.includes("image")
             ? "image/png"
             : "video/mp4",
       tags: selectedMaterialLabels,

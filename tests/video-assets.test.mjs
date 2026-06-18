@@ -32,11 +32,19 @@ async function importVideoAssetsModule() {
   return import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
 }
 
-test("video asset categories cover image clip audio and cover assets", async () => {
+test("video asset categories cover image clip audio cover and brand sticker assets", async () => {
   const { VIDEO_ASSET_CATEGORY_OPTIONS } = await importVideoAssetsModule()
   assert.deepEqual(
     VIDEO_ASSET_CATEGORY_OPTIONS.map((item) => item.kind),
-    ["stickman_image", "yanling_clip", "showcase_clip", "bgm", "sfx", "cover_image"]
+    [
+      "stickman_image",
+      "yanling_clip",
+      "showcase_clip",
+      "brand_sticker",
+      "bgm",
+      "sfx",
+      "cover_image",
+    ]
   )
 })
 
@@ -227,6 +235,9 @@ test("manual external material labels stay explicit and placeholders are task sc
       "opening_hook",
       "ending_conversion",
       "product_proof",
+      "doubao_icon",
+      "yanling_icon",
+      "jianying_icon",
     ]
   )
   assert.deepEqual(asset.tags, ["tool_demo"])
@@ -237,6 +248,39 @@ test("manual external material labels stay explicit and placeholders are task sc
     "product_proof",
     "shot_03",
   ])
+})
+
+test("product icon labels persist on brand sticker assets without polluting generated shot image labels", async () => {
+  const {
+    createImportedVideoAsset,
+    getExternalMaterialLabels,
+    serializeVideoAssetsForSnapshot,
+  } = await importVideoAssetsModule()
+  const brandSticker = createImportedVideoAsset({
+    taskId: "task_01",
+    kind: "brand_sticker",
+    filename: "doubao-icon.png",
+    mimeType: "image/png",
+    tags: ["doubao_icon", "yanling_icon", "unknown-product-label"],
+  })
+  const generatedShotImage = createImportedVideoAsset({
+    taskId: "task_01",
+    kind: "stickman_image",
+    filename: "shot-01.png",
+    mimeType: "image/png",
+    tags: ["generated_image", "shot_01"],
+  })
+  const serialized = serializeVideoAssetsForSnapshot([brandSticker])
+
+  assert.equal(brandSticker.kind, "brand_sticker")
+  assert.deepEqual(getExternalMaterialLabels(brandSticker), [
+    "doubao_icon",
+    "yanling_icon",
+  ])
+  assert.equal(serialized.includes("doubao_icon"), true)
+  assert.equal(serialized.includes("yanling_icon"), true)
+  assert.equal(serialized.includes("unknown-product-label"), true)
+  assert.deepEqual(getExternalMaterialLabels(generatedShotImage), [])
 })
 
 test("stickman storyboard image generation stops immediately on insufficient balance", async () => {

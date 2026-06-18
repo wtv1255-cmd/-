@@ -19,6 +19,9 @@ export type ExternalMaterialLabelId =
   | "opening_hook"
   | "ending_conversion"
   | "product_proof"
+  | "doubao_icon"
+  | "yanling_icon"
+  | "jianying_icon"
 
 export type ExternalMaterialLabelOption = {
   id: ExternalMaterialLabelId
@@ -184,6 +187,7 @@ export const VIDEO_ASSET_CATEGORY_OPTIONS: VideoAssetCategoryOption[] = [
   { kind: "stickman_image", label: "火柴人图", accepts: "image/*" },
   { kind: "yanling_clip", label: "炎灵录屏", accepts: "video/*" },
   { kind: "showcase_clip", label: "成品展示", accepts: "video/*" },
+  { kind: "brand_sticker", label: "品牌贴片", accepts: "image/*" },
   { kind: "bgm", label: "BGM", accepts: "audio/*" },
   { kind: "sfx", label: "音效", accepts: "audio/*" },
   { kind: "cover_image", label: "封面图", accepts: "image/*" },
@@ -196,6 +200,9 @@ export const EXTERNAL_MATERIAL_LABEL_OPTIONS: ExternalMaterialLabelOption[] = [
   { id: "opening_hook", label: "开头钩子" },
   { id: "ending_conversion", label: "结尾转化" },
   { id: "product_proof", label: "产品证明" },
+  { id: "doubao_icon", label: "豆包图标" },
+  { id: "yanling_icon", label: "炎灵图标" },
+  { id: "jianying_icon", label: "剪映图标" },
 ]
 
 const externalMaterialLabelIds = new Set(
