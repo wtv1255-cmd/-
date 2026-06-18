@@ -3630,8 +3630,8 @@ function ApiProfilesPanel({
         <div>
           <h2 className="text-lg font-semibold">API Profile</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            文本、图片、视频解析和发布辅助分别选择本机保存的用户 API。Key
-            只用于请求，不写入任务日志或导出摘要。
+            文本和图片生成已接入运行时主备切换；视频解析和发布辅助目前是配置预留。Key
+            只用于对应请求，不写入任务日志或导出摘要。
           </p>
         </div>
         <Settings className="size-5 text-muted-foreground" />

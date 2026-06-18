@@ -116,3 +116,11 @@ test("video factory wires api profile failover into live text and image calls", 
   assert.match(source, /pauseReason/)
   assert.doesNotMatch(source, /message: .*apiKey/)
 })
+
+test("video factory scopes api profile runtime failover claims to wired modules", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /文本和图片生成已接入运行时主备切换/)
+  assert.match(source, /视频解析和发布辅助目前是配置预留/)
+  assert.doesNotMatch(source, /文本、图片、视频解析和发布辅助分别选择本机保存的用户 API。Key/)
+})
