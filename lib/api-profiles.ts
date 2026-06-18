@@ -44,6 +44,74 @@ export type ApiProfileLogEntry = {
   apiKey?: never
 }
 
+export type ApiFailoverPolicy = {
+  service: ApiProfileService
+  primaryProfileId?: string
+  backupProfileIds?: string[]
+}
+
+export type ApiFailoverAttempt = ApiProfileRequestContext & {
+  label: string
+}
+
+export type ApiFailoverPlan = {
+  service: ApiProfileService
+  attempts: ApiFailoverAttempt[]
+}
+
+export type ApiFailoverLogEntry = {
+  service: ApiProfileService
+  attempts: Array<{
+    profileId: string
+    label: string
+    apiBaseUrl: string
+    model: string
+    configured: boolean
+    apiKey?: never
+  }>
+}
+
+export type ApiProfileFailureKind = "retryable" | "terminal"
+
+export type ApiProfileFailureInput = {
+  status?: number
+  message?: string
+}
+
+export type ApiFailoverRunState = {
+  attempts: Array<{ profileId: string }>
+  activeProfileId: string
+  failedAttempts: Array<{
+    profileId: string
+    status: number | null
+    message: string
+    kind: ApiProfileFailureKind
+  }>
+  paused: boolean
+  pauseReason: string
+}
+
+export type RecordApiProfileFailureInput = {
+  profileId: string
+  error: ApiProfileFailureInput
+}
+
+export type ApiProfileFailoverSuccess<T> = {
+  ok: true
+  value: T
+  state: ApiFailoverRunState
+}
+
+export type ApiProfileFailoverPaused = {
+  ok: false
+  state: ApiFailoverRunState
+  error: string
+}
+
+export type ApiProfileFailoverResult<T> =
+  | ApiProfileFailoverSuccess<T>
+  | ApiProfileFailoverPaused
+
 export const API_PROFILES_STORAGE_KEY = "ta-huo:api-profiles:v1"
 
 export const API_PROFILE_SERVICES = [
@@ -119,6 +187,12 @@ function cleanId(value: unknown, fallback: string) {
 
 function isApiProfileService(value: unknown): value is ApiProfileService {
   return API_PROFILE_SERVICES.includes(value as ApiProfileService)
+}
+
+function cleanFailureMessage(value: unknown) {
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : "API Profile 请求失败"
 }
 
 function normalizeProfile(
@@ -304,6 +378,178 @@ export function createApiProfileLogEntry(
     label: profile.label,
     apiBaseUrl: profile.apiBaseUrl,
     configured: Boolean(profile.apiKey.trim()),
+  }
+}
+
+export function createApiFailoverPlan(
+  store: ApiProfileStore,
+  policy: ApiFailoverPolicy
+): ApiFailoverPlan {
+  const normalizedStore = normalizeApiProfileStore(store)
+  const profiles = normalizedStore.profiles[policy.service]
+  const orderedProfileIds = [
+    policy.primaryProfileId || normalizedStore.activeProfileByService[policy.service],
+    ...(policy.backupProfileIds || []),
+  ].filter(Boolean)
+  const seen = new Set<string>()
+  const orderedProfiles = orderedProfileIds
+    .map((profileId) => profiles.find((profile) => profile.id === profileId))
+    .filter((profile): profile is ApiProfile => Boolean(profile))
+    .filter((profile) => {
+      if (seen.has(profile.id)) return false
+      seen.add(profile.id)
+      return true
+    })
+
+  const fallbackProfile =
+    orderedProfiles.length > 0 ? orderedProfiles : [resolveApiProfile(normalizedStore, policy.service)]
+
+  return {
+    service: policy.service,
+    attempts: fallbackProfile.map((profile) => ({
+      service: policy.service,
+      profileId: profile.id,
+      label: profile.label,
+      model: profile.model,
+      apiBaseUrl: profile.apiBaseUrl,
+      apiKey: profile.apiKey,
+    })),
+  }
+}
+
+export function createApiFailoverLogEntry(
+  plan: ApiFailoverPlan
+): ApiFailoverLogEntry {
+  return {
+    service: plan.service,
+    attempts: plan.attempts.map((attempt) => ({
+      profileId: attempt.profileId,
+      label: attempt.label,
+      apiBaseUrl: attempt.apiBaseUrl,
+      model: attempt.model,
+      configured: Boolean(attempt.apiKey.trim()),
+    })),
+  }
+}
+
+export function classifyApiProfileFailure(
+  error: ApiProfileFailureInput
+): ApiProfileFailureKind {
+  const status = Number(error.status)
+  if (!Number.isFinite(status) || status === 408 || status === 409 || status === 425) {
+    return "retryable"
+  }
+  if (status === 429 || status >= 500) return "retryable"
+  return "terminal"
+}
+
+export function createApiFailoverRunState(
+  attempts: Array<{ profileId: string }>
+): ApiFailoverRunState {
+  const orderedAttempts = attempts
+    .filter((attempt) => attempt.profileId)
+    .map((attempt) => ({ profileId: attempt.profileId }))
+  return {
+    attempts: orderedAttempts,
+    activeProfileId: orderedAttempts[0]?.profileId || "",
+    failedAttempts: [],
+    paused: orderedAttempts.length === 0,
+    pauseReason: orderedAttempts.length ? "" : "没有可用 API Profile",
+  }
+}
+
+export function recordApiProfileFailure(
+  state: ApiFailoverRunState,
+  { profileId, error }: RecordApiProfileFailureInput
+): ApiFailoverRunState {
+  const kind = classifyApiProfileFailure(error)
+  const failedAttempts = [
+    ...state.failedAttempts,
+    {
+      profileId,
+      status: Number.isFinite(Number(error.status)) ? Number(error.status) : null,
+      message: cleanFailureMessage(error.message),
+      kind,
+    },
+  ]
+  const currentIndex = state.attempts.findIndex(
+    (attempt) => attempt.profileId === profileId
+  )
+  const nextAttempt =
+    kind === "retryable" ? state.attempts[currentIndex + 1] : undefined
+
+  if (nextAttempt) {
+    return {
+      ...state,
+      activeProfileId: nextAttempt.profileId,
+      failedAttempts,
+      paused: false,
+      pauseReason: "",
+    }
+  }
+
+  const reason =
+    kind === "retryable"
+      ? `所有 API Profile 均不可用：${cleanFailureMessage(error.message)}`
+      : `API Profile ${profileId} 不可继续：${cleanFailureMessage(error.message)}`
+
+  return {
+    ...state,
+    failedAttempts,
+    paused: true,
+    pauseReason: reason,
+  }
+}
+
+export async function runApiProfileFailover<T>(
+  plan: ApiFailoverPlan,
+  operation: (attempt: ApiFailoverAttempt) => Promise<T>
+): Promise<ApiProfileFailoverResult<T>> {
+  let state = createApiFailoverRunState(plan.attempts)
+  if (state.paused) {
+    return {
+      ok: false,
+      state,
+      error: state.pauseReason,
+    }
+  }
+
+  for (const attempt of plan.attempts) {
+    try {
+      const value = await operation(attempt)
+      return {
+        ok: true,
+        value,
+        state: {
+          ...state,
+          activeProfileId: attempt.profileId,
+          paused: false,
+          pauseReason: "",
+        },
+      }
+    } catch (error) {
+      const failure =
+        error && typeof error === "object"
+          ? (error as ApiProfileFailureInput)
+          : { message: error instanceof Error ? error.message : String(error) }
+      state = recordApiProfileFailure(state, {
+        profileId: attempt.profileId,
+        error: failure,
+      })
+      if (state.paused) {
+        return {
+          ok: false,
+          state,
+          error: state.pauseReason,
+        }
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    state,
+    error: state.pauseReason || "所有 API Profile 均不可用",
   }
 }
 
