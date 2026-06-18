@@ -192,6 +192,53 @@ test("per-shot generation plan skips successful shots unless regenerate is expli
   assert.deepEqual(toggleVideoAssetPreviewExpansion(["asset_03"], "asset_03"), [])
 })
 
+test("manual external material labels stay explicit and placeholders are task scoped", async () => {
+  const {
+    EXTERNAL_MATERIAL_LABEL_OPTIONS,
+    createExternalMaterialPlaceholderAsset,
+    createImportedVideoAsset,
+    normalizeExternalMaterialLabels,
+  } = await importVideoAssetsModule()
+  const labels = normalizeExternalMaterialLabels([
+    "tool_demo",
+    "filename-guessed-hook",
+    "proof",
+    "tool_demo",
+  ])
+  const asset = createImportedVideoAsset({
+    taskId: "task_01",
+    kind: "yanling_clip",
+    filename: "dramatic-proof-demo.mp4",
+    tags: labels,
+  })
+  const placeholder = createExternalMaterialPlaceholderAsset({
+    taskId: "task_01",
+    labelId: "product_proof",
+    shotId: "shot_03",
+  })
+
+  assert.equal(placeholder.id, "placeholder_product_proof_shot_03")
+  assert.deepEqual(
+    EXTERNAL_MATERIAL_LABEL_OPTIONS.map((option) => option.id),
+    [
+      "tool_demo",
+      "real_drama_clip",
+      "emotion_boost",
+      "opening_hook",
+      "ending_conversion",
+      "product_proof",
+    ]
+  )
+  assert.deepEqual(asset.tags, ["tool_demo"])
+  assert.equal(placeholder.kind, "showcase_clip")
+  assert.match(placeholder.displayName, /占位/)
+  assert.deepEqual(placeholder.tags, [
+    "external_material_placeholder",
+    "product_proof",
+    "shot_03",
+  ])
+})
+
 test("stickman storyboard image generation stops immediately on insufficient balance", async () => {
   const { generateStickmanStoryboardAsset } = await importVideoAssetsModule()
   let attempts = 0

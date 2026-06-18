@@ -1,6 +1,8 @@
+import type { ExternalMaterialLabelId } from "@/lib/video-assets"
 import type {
   TaskFileRef,
   TimelineTrack,
+  VideoAsset,
   VideoDurationPreset,
   VideoTimeline,
   VoicePlan,
@@ -19,12 +21,14 @@ export type TimelineStoryboardInput = {
   assetIds: string[]
   startMs: number
   endMs: number
+  requiredMaterialLabel?: ExternalMaterialLabelId
 }
 
 export type CreateUnifiedVideoTimelineInput = {
   taskId: string
   voice: VoicePlan
   storyboard: TimelineStoryboardInput[]
+  externalAssets?: Pick<VideoAsset, "id" | "tags">[]
   bgmAssetId?: string
   sfxAssetIds?: string[]
 }
@@ -78,6 +82,24 @@ function createVoiceFileRef(taskId: string, filename: string): TaskFileRef {
   }
 }
 
+function placeholderAssetId(labelId: ExternalMaterialLabelId, shotId: string) {
+  return `placeholder_${labelId}_${cleanSegment(shotId, "shot")}`
+}
+
+function resolveVisualAssetId(
+  shot: TimelineStoryboardInput,
+  externalAssets: Pick<VideoAsset, "id" | "tags">[]
+) {
+  if (shot.assetIds.length) return shot.assetIds[0]
+  if (!shot.requiredMaterialLabel) return shot.id
+
+  return (
+    externalAssets.find((asset) =>
+      (asset.tags || []).includes(shot.requiredMaterialLabel || "")
+    )?.id || placeholderAssetId(shot.requiredMaterialLabel, shot.id)
+  )
+}
+
 export function createVoicePlanFromScript({
   taskId,
   script,
@@ -105,6 +127,7 @@ export function createUnifiedVideoTimeline({
   taskId,
   voice,
   storyboard,
+  externalAssets = [],
   bgmAssetId,
   sfxAssetIds = [],
 }: CreateUnifiedVideoTimelineInput): VideoTimeline {
@@ -119,7 +142,7 @@ export function createUnifiedVideoTimeline({
       type: "visual",
       clips: storyboard.map((shot) => ({
         id: `${shot.id}_visual`,
-        assetId: shot.assetIds[0] || shot.id,
+        assetId: resolveVisualAssetId(shot, externalAssets),
         startMs: shot.startMs,
         durationMs: Math.max(0, shot.endMs - shot.startMs),
       })),

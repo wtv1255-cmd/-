@@ -12,6 +12,19 @@ export type VideoAssetCategoryOption = {
   accepts: string
 }
 
+export type ExternalMaterialLabelId =
+  | "tool_demo"
+  | "real_drama_clip"
+  | "emotion_boost"
+  | "opening_hook"
+  | "ending_conversion"
+  | "product_proof"
+
+export type ExternalMaterialLabelOption = {
+  id: ExternalMaterialLabelId
+  label: string
+}
+
 export type CreateImportedVideoAssetInput = {
   taskId: string
   kind: VideoAssetKind
@@ -20,6 +33,12 @@ export type CreateImportedVideoAssetInput = {
   mimeType?: string
   durationMs?: number
   tags?: string[]
+}
+
+export type CreateExternalMaterialPlaceholderAssetInput = {
+  taskId: string
+  labelId: ExternalMaterialLabelId
+  shotId: string
 }
 
 export type VideoImageGenerationPresetId =
@@ -46,7 +65,9 @@ export type VideoImageGenerationSettings = {
 export type NormalizeVideoImageGenerationSettingsInput = Partial<
   Pick<VideoImageGenerationSettings, "presetId" | "styleStrength">
 > & {
-  advanced?: Partial<Pick<VideoImageGenerationSettings, "size" | "quality" | "styleStrength">>
+  advanced?: Partial<
+    Pick<VideoImageGenerationSettings, "size" | "quality" | "styleStrength">
+  >
 }
 
 export type BuildVideoImageGenerationRequestInput = {
@@ -168,6 +189,19 @@ export const VIDEO_ASSET_CATEGORY_OPTIONS: VideoAssetCategoryOption[] = [
   { kind: "cover_image", label: "封面图", accepts: "image/*" },
 ]
 
+export const EXTERNAL_MATERIAL_LABEL_OPTIONS: ExternalMaterialLabelOption[] = [
+  { id: "tool_demo", label: "工具展示" },
+  { id: "real_drama_clip", label: "真实漫剧片段" },
+  { id: "emotion_boost", label: "情绪加强" },
+  { id: "opening_hook", label: "开头钩子" },
+  { id: "ending_conversion", label: "结尾转化" },
+  { id: "product_proof", label: "产品证明" },
+]
+
+const externalMaterialLabelIds = new Set(
+  EXTERNAL_MATERIAL_LABEL_OPTIONS.map((option) => option.id)
+)
+
 function cleanText(value: unknown, fallback = "") {
   const text =
     typeof value === "string" ? value.replace(/\s+/g, " ").trim() : ""
@@ -188,6 +222,15 @@ function cleanSegment(value: unknown, fallback: string) {
 function cleanNumber(value: unknown) {
   const number = Number(value)
   return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0
+}
+
+function isExternalMaterialLabelId(
+  value: unknown
+): value is ExternalMaterialLabelId {
+  return (
+    typeof value === "string" &&
+    externalMaterialLabelIds.has(value as ExternalMaterialLabelId)
+  )
 }
 
 function isInsufficientBalanceError(error: unknown) {
@@ -340,6 +383,37 @@ export function createImportedVideoAsset({
     },
     tags: tags.map((tag) => cleanText(tag)).filter(Boolean),
     durationMs: durationMs === undefined ? undefined : cleanNumber(durationMs),
+  }
+}
+
+export function normalizeExternalMaterialLabels(values: unknown[]) {
+  return Array.from(new Set(values.filter(isExternalMaterialLabelId)))
+}
+
+export function getExternalMaterialLabels(asset: Pick<VideoAsset, "tags">) {
+  return normalizeExternalMaterialLabels(asset.tags || [])
+}
+
+export function createExternalMaterialPlaceholderAsset({
+  taskId,
+  labelId,
+  shotId,
+}: CreateExternalMaterialPlaceholderAssetInput): VideoAsset {
+  const safeShotId = cleanSegment(shotId, "shot")
+  const label =
+    EXTERNAL_MATERIAL_LABEL_OPTIONS.find((option) => option.id === labelId)
+      ?.label || "外部素材"
+  const asset = createImportedVideoAsset({
+    taskId,
+    kind: "showcase_clip",
+    filename: `placeholder_${labelId}_${safeShotId}.mp4`,
+    mimeType: "video/mp4",
+    tags: ["external_material_placeholder", labelId, safeShotId],
+  })
+  return {
+    ...asset,
+    id: `placeholder_${labelId}_${safeShotId}`,
+    displayName: `${label}占位 · ${safeShotId}`,
   }
 }
 

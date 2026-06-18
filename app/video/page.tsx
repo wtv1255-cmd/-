@@ -72,16 +72,21 @@ import {
   type ApiProfileStore,
 } from "@/lib/api-profiles"
 import {
+  EXTERNAL_MATERIAL_LABEL_OPTIONS,
   IMAGE_GENERATION_PRESETS,
   VIDEO_ASSET_CATEGORY_OPTIONS,
+  createExternalMaterialPlaceholderAsset,
   createImportedVideoAsset,
   createPerShotImageGenerationPlan,
   createVideoAssetLogEntry,
+  getExternalMaterialLabels,
   generateStickmanStoryboardAsset,
   normalizeVideoImageGenerationSettings,
+  normalizeExternalMaterialLabels,
   removeVideoAssetById,
   runStickmanImageGenerationQueue,
   toggleVideoAssetPreviewExpansion,
+  type ExternalMaterialLabelId,
   type VideoImageGenerationPresetId,
   type VideoImageGenerationSettings,
 } from "@/lib/video-assets"
@@ -153,6 +158,27 @@ const apiProfileServiceLabels: Record<ApiProfileService, string> = {
 const sourceModeLabels: Record<ViralSourceCollectionMode, string> = {
   recent_24_48h: "近 24-48 小时新爆款",
   stable_7d: "近 7 天稳态爆款",
+}
+
+const materialIntentRules: Array<{
+  labelId: ExternalMaterialLabelId
+  patterns: RegExp[]
+}> = [
+  { labelId: "opening_hook", patterns: [/开头|钩子|hook/i] },
+  { labelId: "ending_conversion", patterns: [/结尾|转化|关注|下单|私信/i] },
+  { labelId: "product_proof", patterns: [/证明|案例|结果|数据|对比/i] },
+  { labelId: "tool_demo", patterns: [/工具|演示|操作|流程|界面/i] },
+  { labelId: "real_drama_clip", patterns: [/漫剧|剧情|真人|片段/i] },
+  { labelId: "emotion_boost", patterns: [/情绪|冲突|痛点|震惊|共鸣/i] },
+]
+
+function inferRequiredMaterialLabel(
+  shot: Pick<StoryboardShot, "id" | "voiceText" | "visualDescription" | "prompt">
+): ExternalMaterialLabelId | undefined {
+  const text = `${shot.voiceText} ${shot.visualDescription} ${shot.prompt}`
+  return materialIntentRules.find((rule) =>
+    rule.patterns.some((pattern) => pattern.test(text))
+  )?.labelId
 }
 
 type VideoFactoryModuleId =
@@ -227,6 +253,9 @@ function VideoFactoryShell() {
   const [assetImportKind, setAssetImportKind] =
     useState<VideoAssetKind>("yanling_clip")
   const [assetImportName, setAssetImportName] = useState("")
+  const [selectedMaterialLabels, setSelectedMaterialLabels] = useState<
+    ExternalMaterialLabelId[]
+  >([])
   const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([])
   const [imageGenerationSettings, setImageGenerationSettings] =
     useState<VideoImageGenerationSettings>(() =>
@@ -869,6 +898,41 @@ function VideoFactoryShell() {
     )
   }
 
+  const toggleSelectedMaterialLabel = (labelId: ExternalMaterialLabelId) => {
+    setSelectedMaterialLabels((current) =>
+      normalizeExternalMaterialLabels(
+        current.includes(labelId)
+          ? current.filter((item) => item !== labelId)
+          : [...current, labelId]
+      )
+    )
+  }
+
+  const updateAssetMaterialLabels = (
+    assetId: string,
+    labels: ExternalMaterialLabelId[]
+  ) => {
+    const nextLabels = normalizeExternalMaterialLabels(labels)
+    const applyLabels = (asset: VideoAsset) =>
+      asset.id === assetId
+        ? {
+            ...asset,
+            tags: [
+              ...(asset.tags || []).filter(
+                (tag) => !getExternalMaterialLabels({ tags: [tag] }).length
+              ),
+              ...nextLabels,
+            ],
+          }
+        : asset
+
+    setVideoAssets((current) => current.map(applyLabels))
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      assets: snapshot.assets.map(applyLabels),
+    }))
+  }
+
   const generateStickmanAsset = async (
     targetShots?: StoryboardShot[],
     actionLabel = "生成火柴人图"
@@ -1100,6 +1164,7 @@ function VideoFactoryShell() {
           : assetImportKind.includes("image")
             ? "image/png"
             : "video/mp4",
+      tags: selectedMaterialLabels,
     })
     addVideoAsset(asset, `已导入任务素材：${asset.displayName}`)
     setAssetImportName("")
@@ -1133,32 +1198,75 @@ function VideoFactoryShell() {
     const visualAssets = videoAssets.filter((asset) =>
       ["stickman_image", "yanling_clip", "showcase_clip"].includes(asset.kind)
     )
-    const storyboard = storyboardShots.map((shot, index) => ({
-      id: shot.id,
-      startMs: shot.startMs,
-      endMs: shot.endMs,
-      assetIds:
-        shot.assetIds.length > 0
-          ? shot.assetIds
-          : [
-              visualAssets[index % Math.max(visualAssets.length, 1)]?.id ||
-                shot.id,
-            ],
-    }))
+    const placeholderAssets = storyboardShots
+      .map((shot) => {
+        const requiredMaterialLabel = inferRequiredMaterialLabel(shot)
+        if (
+          !requiredMaterialLabel ||
+          shot.assetIds.length ||
+          visualAssets.some((asset) =>
+            getExternalMaterialLabels(asset).includes(requiredMaterialLabel)
+          )
+        ) {
+          return null
+        }
+
+        return createExternalMaterialPlaceholderAsset({
+          taskId: activeTask.id,
+          labelId: requiredMaterialLabel,
+          shotId: shot.id,
+        })
+      })
+      .filter((asset): asset is VideoAsset => Boolean(asset))
+    const timelineExternalAssets = [...visualAssets, ...placeholderAssets]
+    const storyboard = storyboardShots.map((shot, index) => {
+      const requiredMaterialLabel = inferRequiredMaterialLabel(shot)
+      return {
+        id: shot.id,
+        startMs: shot.startMs,
+        endMs: shot.endMs,
+        requiredMaterialLabel,
+        assetIds:
+          shot.assetIds.length > 0 || requiredMaterialLabel
+            ? shot.assetIds
+            : [
+                visualAssets[index % Math.max(visualAssets.length, 1)]?.id ||
+                  shot.id,
+              ],
+      }
+    })
     const timeline = createUnifiedVideoTimeline({
       taskId: activeTask.id,
       voice,
       storyboard,
+      externalAssets: timelineExternalAssets,
       bgmAssetId: videoAssets.find((asset) => asset.kind === "bgm")?.id,
       sfxAssetIds: videoAssets
         .filter((asset) => asset.kind === "sfx")
         .map((asset) => asset.id),
     })
+    const nextAssets = [
+      ...placeholderAssets.filter(
+        (placeholder) =>
+          !videoAssets.some((asset) => asset.id === placeholder.id)
+      ),
+      ...videoAssets,
+    ]
 
     setVoicePlan(voice)
     setVideoTimeline(timeline)
+    if (placeholderAssets.length) {
+      setVideoAssets(nextAssets)
+    }
     updateActiveTaskSnapshot((snapshot) => ({
       ...snapshot,
+      assets: [
+        ...placeholderAssets.filter(
+          (placeholder) =>
+            !snapshot.assets.some((asset) => asset.id === placeholder.id)
+        ),
+        ...snapshot.assets,
+      ],
       voice,
       timeline,
       records: [
@@ -1485,6 +1593,7 @@ function VideoFactoryShell() {
                 generatedStickmanShotCount={generatedStickmanShotCount}
                 importKind={assetImportKind}
                 importName={assetImportName}
+                selectedMaterialLabels={selectedMaterialLabels}
                 onImagePresetChange={updateImageGenerationPreset}
                 onAdvancedImageSettingChange={updateAdvancedImageSetting}
                 onShowAdvancedImageSettingsChange={
@@ -1497,6 +1606,8 @@ function VideoFactoryShell() {
                 onToggleAssetPreview={toggleAssetPreview}
                 onImportKindChange={setAssetImportKind}
                 onImportNameChange={setAssetImportName}
+                onSelectedMaterialLabelToggle={toggleSelectedMaterialLabel}
+                onAssetLabelsChange={updateAssetMaterialLabels}
                 onImportAsset={importVideoAsset}
                 onRemoveAsset={removeVideoAsset}
               />
@@ -2335,6 +2446,7 @@ function VideoAssetLibraryPanel({
   generatedStickmanShotCount,
   importKind,
   importName,
+  selectedMaterialLabels,
   onImagePresetChange,
   onAdvancedImageSettingChange,
   onShowAdvancedImageSettingsChange,
@@ -2345,6 +2457,8 @@ function VideoAssetLibraryPanel({
   onToggleAssetPreview,
   onImportKindChange,
   onImportNameChange,
+  onSelectedMaterialLabelToggle,
+  onAssetLabelsChange,
   onImportAsset,
   onRemoveAsset,
 }: {
@@ -2359,6 +2473,7 @@ function VideoAssetLibraryPanel({
   generatedStickmanShotCount: number
   importKind: VideoAssetKind
   importName: string
+  selectedMaterialLabels: ExternalMaterialLabelId[]
   onImagePresetChange: (value: VideoImageGenerationPresetId) => void
   onAdvancedImageSettingChange: (
     patch: Partial<
@@ -2373,6 +2488,11 @@ function VideoAssetLibraryPanel({
   onToggleAssetPreview: (assetId: string) => void
   onImportKindChange: (value: VideoAssetKind) => void
   onImportNameChange: (value: string) => void
+  onSelectedMaterialLabelToggle: (value: ExternalMaterialLabelId) => void
+  onAssetLabelsChange: (
+    assetId: string,
+    labels: ExternalMaterialLabelId[]
+  ) => void
   onImportAsset: () => void
   onRemoveAsset: (assetId: string) => void
 }) {
@@ -2545,6 +2665,27 @@ function VideoAssetLibraryPanel({
           </Button>
         </div>
 
+        <div className="grid gap-2 rounded-lg border bg-muted/20 p-3">
+          <div className="text-xs font-medium text-muted-foreground">
+            用途标签
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {EXTERNAL_MATERIAL_LABEL_OPTIONS.map((option) => (
+              <label
+                key={option.id}
+                className="flex h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs text-muted-foreground"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedMaterialLabels.includes(option.id)}
+                  onChange={() => onSelectedMaterialLabelToggle(option.id)}
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
         {stickmanShots.length ? (
           <div className="grid gap-2">
             {stickmanShots.map((shot) => {
@@ -2583,52 +2724,88 @@ function VideoAssetLibraryPanel({
 
         <div className="grid gap-2">
           {assets.length ? (
-            assets.map((asset) => (
-              <div
-                key={asset.id}
-                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg border bg-muted/30 p-3"
-              >
-                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
-                  {asset.kind.includes("image") && asset.previewUrl ? (
-                    <button
-                      type="button"
-                      className="text-left"
-                      onClick={() => onToggleAssetPreview(asset.id)}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={asset.previewUrl}
-                        alt={asset.displayName}
-                        className={`rounded-md border object-cover ${
-                          expandedAssetIds.includes(asset.id)
-                            ? "h-72 w-40"
-                            : "size-14"
-                        }`}
-                      />
-                    </button>
-                  ) : (
-                    <div className="grid size-14 place-items-center rounded-md border bg-background text-muted-foreground">
-                      <ImagePlus className="size-4" />
+            assets.map((asset) => {
+              const assetLabels = getExternalMaterialLabels(asset)
+              return (
+                <div
+                  key={asset.id}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg border bg-muted/30 p-3"
+                >
+                  <div className="grid min-w-0 gap-3">
+                    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
+                      {asset.kind.includes("image") && asset.previewUrl ? (
+                        <button
+                          type="button"
+                          className="text-left"
+                          onClick={() => onToggleAssetPreview(asset.id)}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={asset.previewUrl}
+                            alt={asset.displayName}
+                            className={`rounded-md border object-cover ${
+                              expandedAssetIds.includes(asset.id)
+                                ? "h-72 w-40"
+                                : "size-14"
+                            }`}
+                          />
+                        </button>
+                      ) : (
+                        <div className="grid size-14 place-items-center rounded-md border bg-background text-muted-foreground">
+                          <ImagePlus className="size-4" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {asset.displayName}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-muted-foreground">
+                          {asset.kind} · {asset.file.path}
+                        </div>
+                      </div>
                     </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
-                      {asset.displayName}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-muted-foreground">
-                      {asset.kind} · {asset.file.path}
+                    <div className="flex flex-wrap gap-1.5">
+                      {EXTERNAL_MATERIAL_LABEL_OPTIONS.map((option) => {
+                        const checked = assetLabels.includes(option.id)
+                        return (
+                          <label
+                            key={option.id}
+                            className={`flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs ${
+                              checked
+                                ? "bg-background text-foreground"
+                                : "bg-muted/20 text-muted-foreground"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                onAssetLabelsChange(
+                                  asset.id,
+                                  checked
+                                    ? assetLabels.filter(
+                                        (label) => label !== option.id
+                                      )
+                                    : [...assetLabels, option.id]
+                                )
+                              }
+                            />
+                            {option.label}
+                          </label>
+                        )
+                      })}
                     </div>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onRemoveAsset(asset.id)}
+                  >
+                    移除
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onRemoveAsset(asset.id)}
-                >
-                  移除
-                </Button>
-              </div>
-            ))
+              )
+            })
           ) : (
             <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
               还没有任务素材。可先记录火柴人图，或导入炎灵录屏、成品展示、BGM、音效和封面。

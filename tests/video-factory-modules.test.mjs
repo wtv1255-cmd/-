@@ -68,3 +68,15 @@ test("asset module exposes preset parameters per-shot actions and preview expans
   assert.match(source, /expandedAssetIds/)
   assert.match(source, /toggleVideoAssetPreviewExpansion/)
 })
+
+test("asset module exposes manual external material labels and timeline placeholders", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /EXTERNAL_MATERIAL_LABEL_OPTIONS/)
+  assert.match(source, /EXTERNAL_MATERIAL_LABEL_OPTIONS\.map/)
+  assert.match(source, /option\.label/)
+  assert.match(source, /用途标签/)
+  assert.match(source, /onAssetLabelsChange/)
+  assert.match(source, /requiredMaterialLabel/)
+  assert.match(source, /externalAssets/)
+})

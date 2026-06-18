@@ -85,6 +85,67 @@ test("timeline aligns visual voice subtitle bgm and sfx tracks", async () => {
   assert.equal(timeline.tracks[2].clips.length, 3)
 })
 
+test("timeline uses manual external material labels and creates placeholders for missing matches", async () => {
+  const { createVoicePlanFromScript, createUnifiedVideoTimeline } =
+    await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script: "开头钩子。\n工具演示。\n产品证明。",
+    durationPreset: "30-45s",
+    audioFilename: "voice.wav",
+  })
+  const timeline = createUnifiedVideoTimeline({
+    taskId: "task_01",
+    voice,
+    storyboard: [
+      {
+        id: "shot_01",
+        assetIds: [],
+        startMs: 0,
+        endMs: 15000,
+        requiredMaterialLabel: "opening_hook",
+      },
+      {
+        id: "shot_02",
+        assetIds: [],
+        startMs: 15000,
+        endMs: 30000,
+        requiredMaterialLabel: "tool_demo",
+      },
+      {
+        id: "shot_03",
+        assetIds: [],
+        startMs: 30000,
+        endMs: 45000,
+        requiredMaterialLabel: "product_proof",
+      },
+    ],
+    externalAssets: [
+      {
+        id: "clip_named_hook_but_manual_tool",
+        kind: "yanling_clip",
+        displayName: "opening-hook-looking-name.mp4",
+        tags: ["tool_demo"],
+        file: {
+          id: "yanling_clip_opening-hook-looking-name.mp4",
+          taskId: "task_01",
+          kind: "yanling_clip",
+          filename: "opening-hook-looking-name.mp4",
+          path: "%APPDATA%/她火/tasks/task_01/yanling_clip/opening-hook-looking-name.mp4",
+          bytes: 0,
+          mimeType: "video/mp4",
+          storage: "app_user_data_task_dir",
+        },
+      },
+    ],
+  })
+  const visualClips = timeline.tracks.find((track) => track.id === "visual").clips
+
+  assert.equal(visualClips[0].assetId, "placeholder_opening_hook_shot_01")
+  assert.equal(visualClips[1].assetId, "clip_named_hook_but_manual_tool")
+  assert.equal(visualClips[2].assetId, "placeholder_product_proof_shot_03")
+})
+
 test("duration presets control pacing across short and long modes", async () => {
   const { createVoicePlanFromScript } = await importTimelineModule()
   const short = createVoicePlanFromScript({
