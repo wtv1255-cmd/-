@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   AlertTriangle,
   Clock3,
@@ -14,6 +14,7 @@ import {
   Save,
   Search,
   Sparkles,
+  SquareStop,
   UploadCloud,
 } from "lucide-react"
 
@@ -72,14 +73,15 @@ import {
 } from "@/lib/api-profiles"
 import {
   VIDEO_ASSET_CATEGORY_OPTIONS,
-  buildVideoImageGenerationRequest,
   createImportedVideoAsset,
   createVideoAssetLogEntry,
+  generateStickmanStoryboardAsset,
   removeVideoAssetById,
+  runStickmanImageGenerationQueue,
 } from "@/lib/video-assets"
 import {
   buildScriptGenerationRequest,
-  createManualVideoAnalysisDraft,
+  createModelVideoAnalysisDraft,
   createScriptGenerationFailureDraft,
   createScriptGenerationLogEntry,
   type VideoAnalysisDraft,
@@ -94,6 +96,13 @@ import {
   createVoicePlanFromScript,
 } from "@/lib/video-timeline"
 import {
+  createDefaultVideoTtsSettings,
+  createVideoTtsLaunchPlan,
+  readVideoTtsSettings,
+  saveVideoTtsSettings,
+  type VideoTtsSettings,
+} from "@/lib/video-tts"
+import {
   createRenderEngineOptions,
   createRenderExportPlan,
   type RenderEngineId,
@@ -107,6 +116,9 @@ import {
   type ViralSourceCandidate,
   type ViralSourceCollectionMode,
 } from "@/lib/video-source-adapters"
+import { imageSourceToBlob } from "@/lib/local-image-library"
+
+const STICKMAN_IMAGE_CONCURRENCY = 8
 
 const defaultPublishAccount: PublishAccount = {
   id: "douyin-main",
@@ -159,6 +171,7 @@ function VideoFactoryShell() {
   const [analysisDraft, setAnalysisDraft] = useState<VideoAnalysisDraft | null>(
     null
   )
+  const [isGeneratingAnalysis, setIsGeneratingAnalysis] = useState(false)
   const [selectedPackages, setSelectedPackages] = useState<VideoPackageId[]>([
     "stickman_meme",
   ])
@@ -169,7 +182,15 @@ function VideoFactoryShell() {
     useState<VideoAssetKind>("yanling_clip")
   const [assetImportName, setAssetImportName] = useState("")
   const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([])
+  const [isGeneratingStickmanImages, setIsGeneratingStickmanImages] =
+    useState(false)
+  const [stickmanProgress, setStickmanProgress] = useState("")
+  const stopStickmanGenerationRef = useRef(false)
   const [voicePlan, setVoicePlan] = useState<VoicePlan | null>(null)
+  const [ttsSettings, setTtsSettings] = useState<VideoTtsSettings>(
+    createDefaultVideoTtsSettings
+  )
+  const [ttsStatus, setTtsStatus] = useState("未检测本地 TTS")
   const [videoTimeline, setVideoTimeline] = useState<VideoTimeline | null>(null)
   const [requestedRenderEngine, setRequestedRenderEngine] =
     useState<RenderEngineId>("jianying")
@@ -196,6 +217,7 @@ function VideoFactoryShell() {
         setTasks(restoredTasks)
         setActiveTaskId(restoredTasks[0]?.id || "")
         setApiProfiles(readApiProfileStore())
+        setTtsSettings(readVideoTtsSettings())
       } catch {
         setPublishDraft(null)
         setTasks([])
@@ -219,16 +241,30 @@ function VideoFactoryShell() {
     Promise.resolve().then(() => {
       if (!alive) return
       if (!activeTask?.id) {
+        setAnalysisDraft(null)
         setStoryboardShots([])
         setVideoAssets([])
+        setStickmanProgress("")
         setVoicePlan(null)
         setVideoTimeline(null)
         setRenderPlan(null)
         return
       }
       const snapshot = readVideoTaskSnapshot(activeTask.id)
+      if (snapshot?.source.userTopic) {
+        setAnalysisTopic(snapshot.source.userTopic)
+      }
+      setAnalysisDraft(
+        snapshot?.voice.text
+          ? createModelVideoAnalysisDraft({
+              sourceText: snapshot.source.userTopic || activeTask.title,
+              modelText: snapshot.voice.text,
+            })
+          : null
+      )
       setStoryboardShots(snapshot?.storyboard || [])
       setVideoAssets(snapshot?.assets || [])
+      setStickmanProgress("")
       setVoicePlan(snapshot?.voice.subtitles.length ? snapshot.voice : null)
       setVideoTimeline(
         snapshot?.timeline.tracks.length ? snapshot.timeline : null
@@ -256,7 +292,7 @@ function VideoFactoryShell() {
     return () => {
       alive = false
     }
-  }, [activeTask?.id, requestedRenderEngine])
+  }, [activeTask?.id, activeTask?.title, requestedRenderEngine])
 
   const persistTasks = (nextTasks: VideoTask[], nextActiveId?: string) => {
     setTasks(nextTasks)
@@ -274,6 +310,31 @@ function VideoFactoryShell() {
   const saveApiProfile = (profile: ApiProfile) => {
     persistApiProfiles(upsertApiProfile(apiProfiles, profile))
     setToast("API Profile 已保存")
+  }
+
+  const saveTtsSettings = (settings: VideoTtsSettings) => {
+    setTtsSettings(settings)
+    saveVideoTtsSettings(settings)
+    setTtsStatus("本地 TTS 配置已保存")
+    setToast("TTS 路径配置已保存")
+  }
+
+  const checkTtsSettings = async (settings = ttsSettings) => {
+    const result = await window.promptCenterDesktop?.checkLocalTtsProject?.({
+      projectPath: settings.projectPath,
+    })
+    if (!result) {
+      setTtsStatus("当前不是桌面端，无法自动检测本地 TTS")
+      return
+    }
+    if (result.ok) {
+      setTtsStatus(`已找到本地 TTS：${result.projectPath}`)
+      return
+    }
+    const missing = Array.isArray(result.missing)
+      ? result.missing.join("、")
+      : result.error || "路径不可用"
+    setTtsStatus(`本地 TTS 未就绪：${missing}`)
   }
 
   const selectApiProfile = (service: ApiProfileService, profileId: string) => {
@@ -357,6 +418,41 @@ function VideoFactoryShell() {
         workflow: activeTask.workflow,
       })
     saveVideoTaskSnapshot(patch(snapshot))
+  }
+
+  const saveCurrentProgress = () => {
+    if (!activeTask) {
+      setToast("请先创建视频任务")
+      return
+    }
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      source: {
+        ...snapshot.source,
+        userTopic: analysisTopic,
+      },
+      packagePlan: {
+        packageIds: selectedPackages,
+        durationPreset: selectedDuration,
+      },
+      storyboard: storyboardShots,
+      assets: videoAssets,
+      voice: {
+        ...(voicePlan || snapshot.voice),
+        text: analysisDraft?.originalScript || voicePlan?.text || snapshot.voice.text,
+      },
+      timeline: videoTimeline || snapshot.timeline,
+      records: [
+        ...snapshot.records,
+        {
+          id: `progress_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "progress_saved",
+          message: "已保存视频工厂当前进度",
+        },
+      ],
+    }))
+    setToast("进度已保存，返回后可继续")
   }
 
   const collectSources = async () => {
@@ -453,7 +549,7 @@ function VideoFactoryShell() {
     setLocalUploadName("")
   }
 
-  const generateAnalysisDraft = () => {
+  const generateAnalysisDraft = async () => {
     const request = buildScriptGenerationRequest({
       profile: buildApiProfileRequestContext(apiProfiles, "text_model"),
       sourceText: analysisTopic,
@@ -461,16 +557,54 @@ function VideoFactoryShell() {
       packageId: "stickman_meme",
     })
     const logEntry = createScriptGenerationLogEntry(request)
-    const draft = request.apiKey
-      ? createManualVideoAnalysisDraft({
-          topic: analysisTopic,
-          packageId: "stickman_meme",
-          durationPreset: "45-60s",
-        })
-      : createScriptGenerationFailureDraft({
-          sourceText: analysisTopic,
-          reason: "文本模型 Profile 尚未配置 API Key，已切换到手动编辑。",
-        })
+    let draft: VideoAnalysisDraft
+
+    setIsGeneratingAnalysis(true)
+    try {
+      if (!request.apiKey) {
+        throw new Error("文本模型 Profile 尚未配置 API Key，已切换到手动编辑。")
+      }
+
+      const response = await fetch("/api/codex/chat/completions", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      })
+      const payload = (await response.json().catch(() => null)) as {
+        text?: unknown
+        error?: unknown
+      } | null
+
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : `文本模型请求失败：${response.status}`
+        )
+      }
+
+      const modelText =
+        typeof payload?.text === "string" ? payload.text.trim() : ""
+      if (!modelText) throw new Error("文本模型没有返回脚本内容")
+
+      draft = createModelVideoAnalysisDraft({
+        sourceText: analysisTopic,
+        modelText,
+      })
+    } catch (error) {
+      draft = createScriptGenerationFailureDraft({
+        sourceText: analysisTopic,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "文本模型请求失败，已切换到手动编辑。",
+      })
+    } finally {
+      setIsGeneratingAnalysis(false)
+    }
 
     setAnalysisDraft(draft)
     updateActiveTaskSnapshot((snapshot) => ({
@@ -489,7 +623,11 @@ function VideoFactoryShell() {
         },
       ],
     }))
-    setToast("已生成可编辑脚本草稿")
+    setToast(
+      draft.status === "ready_for_edit"
+        ? "已调用文本模型生成原创脚本"
+        : "文本模型不可用，已保留手动编辑稿"
+    )
   }
 
   const togglePackage = (packageId: VideoPackageId) => {
@@ -559,30 +697,231 @@ function VideoFactoryShell() {
     }))
   }
 
-  const generateStickmanAsset = () => {
-    const shot = storyboardShots.find((item) => item.visualType === "stickman")
-    if (!activeTask || !shot) {
-      setToast("请先生成火柴人分镜")
+  const stopStickmanGeneration = () => {
+    stopStickmanGenerationRef.current = true
+    setStickmanProgress("正在停止，已发出的请求会先返回")
+    setToast("已请求停止生成")
+  }
+
+  const hasGeneratedStickmanAsset = (shot: StoryboardShot) =>
+    videoAssets.some(
+      (asset) =>
+        asset.kind === "stickman_image" &&
+        asset.tags?.includes("generated_image") &&
+        asset.tags?.includes(shot.id)
+    )
+
+  const stickmanShotCount = storyboardShots.filter(
+    (item) => item.visualType === "stickman"
+  ).length
+  const generatedStickmanShotCount = storyboardShots.filter(
+    (item) => item.visualType === "stickman" && hasGeneratedStickmanAsset(item)
+  ).length
+
+  const generateStickmanAsset = async () => {
+    const stickmanShots = storyboardShots.filter(
+      (item) =>
+        item.visualType === "stickman" && !hasGeneratedStickmanAsset(item)
+    )
+    if (!activeTask || !stickmanShots.length) {
+      setToast(
+        storyboardShots.some((item) => item.visualType === "stickman")
+          ? "火柴人图都已生成，可删除某张后再重新生成"
+          : "请先生成火柴人分镜"
+      )
       return
     }
-    const request = buildVideoImageGenerationRequest({
-      profile: buildApiProfileRequestContext(apiProfiles, "image_generation"),
-      prompt: shot.prompt,
-      negativePrompt: shot.negativePrompt,
-    })
-    const logEntry = createVideoAssetLogEntry(request)
-    const asset = createImportedVideoAsset({
-      taskId: activeTask.id,
-      kind: "stickman_image",
-      filename: `${shot.id}-stickman.png`,
-      mimeType: "image/png",
-      tags: [shot.id, logEntry.profileId],
-    })
-    addVideoAsset(
-      asset,
-      `火柴人图任务已记录：${shot.id} · ${logEntry.profileId} · ${logEntry.promptLength} 字符`
-    )
-    setToast("已记录火柴人图资产")
+
+    stopStickmanGenerationRef.current = false
+    setIsGeneratingStickmanImages(true)
+    const profile = buildApiProfileRequestContext(apiProfiles, "image_generation")
+    let completed = 0
+    let failed = 0
+
+    try {
+      const result = await runStickmanImageGenerationQueue({
+        items: stickmanShots,
+        concurrency: STICKMAN_IMAGE_CONCURRENCY,
+        shouldStop: () => stopStickmanGenerationRef.current,
+        worker: async (shot) => {
+          const updateProgress = (extra = "") => {
+            const running = Math.min(
+              STICKMAN_IMAGE_CONCURRENCY,
+              stickmanShots.length - completed - failed
+            )
+            setStickmanProgress(
+              `已完成 ${completed}/${stickmanShots.length} · 运行 ${running} · 失败 ${failed}${extra}`
+            )
+          }
+
+          try {
+            updateProgress(` · ${shot.id}`)
+            setToast(`正在生成火柴人图：${shot.id}`)
+            const result = await generateStickmanStoryboardAsset({
+              taskId: activeTask.id,
+              shot,
+              profile,
+              onAttempt: (attempt, maxAttempts) =>
+                setStickmanProgress(
+                  `已完成 ${completed}/${stickmanShots.length} · 运行中 · ${shot.id} · 第 ${attempt}/${maxAttempts} 次`
+                ),
+              requestImages: async (request) => {
+                const response = await fetch(request.endpoint, {
+                  method: "POST",
+                  headers: {
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    model: request.model,
+                    prompt: request.prompt,
+                    negative_prompt: request.negativePrompt,
+                    apiBaseUrl: request.apiBaseUrl,
+                    apiKey: request.apiKey,
+                    n: 1,
+                  }),
+                })
+                const payload = (await response.json().catch(() => null)) as {
+                  images?: unknown
+                  error?: unknown
+                } | null
+
+                if (!response.ok) {
+                  throw new Error(
+                    typeof payload?.error === "string"
+                      ? payload.error
+                      : `图片生成失败：${response.status}`
+                  )
+                }
+                if (!Array.isArray(payload?.images)) {
+                  throw new Error("接口没有返回图片")
+                }
+                return payload.images
+              },
+            })
+            const saved = await window.promptCenterDesktop?.saveTaskAssetFile?.({
+              taskId: activeTask.id,
+              kind: result.asset.kind,
+              filename: result.asset.file.filename,
+              mimeType: result.image.mimeType || result.asset.file.mimeType,
+              data: await imageSourceToBlob(result.image).then((blob) =>
+                blob.arrayBuffer()
+              ),
+            })
+            if (!saved?.ok) {
+              throw new Error(saved?.error || "保存火柴人图失败")
+            }
+            const preview =
+              saved.dataUrl ||
+              (await window.promptCenterDesktop?.readTaskAssetPreview?.({
+                filePath: saved.filePath || result.asset.file.path,
+                mimeType: saved.mimeType || result.asset.file.mimeType,
+              }))?.dataUrl ||
+              result.image.dataUrl ||
+              result.image.url ||
+              ""
+            const asset = saved.filePath
+              ? {
+                  ...result.asset,
+                  file: {
+                    ...result.asset.file,
+                    path: saved.filePath,
+                    bytes: saved.bytes || result.asset.file.bytes,
+                    mimeType: saved.mimeType || result.asset.file.mimeType,
+                  },
+                  previewUrl: preview,
+                }
+              : {
+                  ...result.asset,
+                  previewUrl: preview,
+                }
+            const logEntry = createVideoAssetLogEntry(result.request)
+            const record: VideoTaskSnapshot["records"][number] = {
+              id: `asset_${shot.id}_${Date.now()}`,
+              at: new Date().toISOString(),
+              kind: "asset_added",
+              message: `火柴人图已生成：${shot.id} · ${logEntry.profileId} · ${result.attempts} 次请求`,
+            }
+            const isSameShotGeneratedImage = (item: VideoAsset) =>
+              item.kind === "stickman_image" &&
+              item.tags?.includes("generated_image") &&
+              item.tags?.includes(shot.id)
+
+            completed += 1
+            setVideoAssets((current) => [
+              asset,
+              ...current.filter((item) => !isSameShotGeneratedImage(item)),
+            ])
+            setStoryboardShots((current) =>
+              current.map((item) =>
+                item.id === shot.id
+                  ? {
+                      ...item,
+                      status: "ready" as const,
+                      assetIds: [asset.id],
+                    }
+                  : item
+              )
+            )
+            updateActiveTaskSnapshot((snapshot) => ({
+              ...snapshot,
+              storyboard: snapshot.storyboard.map((item) =>
+                item.id === shot.id
+                  ? {
+                      ...item,
+                      status: "ready" as const,
+                      assetIds: [asset.id],
+                    }
+                  : item
+              ),
+              assets: [
+                asset,
+                ...snapshot.assets.filter(
+                  (item) => !isSameShotGeneratedImage(item)
+                ),
+              ],
+              records: [...snapshot.records, record],
+            }))
+            updateProgress()
+          } catch (error) {
+            failed += 1
+            updateProgress(` · ${shot.id} 失败`)
+            throw error
+          }
+        },
+      })
+
+      failed = result.failed
+      if (result.fatalError) {
+        setToast(result.fatalError.message)
+        setStickmanProgress(
+          `已停止：余额不足 · 已完成 ${completed}/${stickmanShots.length} · 失败 ${failed}`
+        )
+        return
+      }
+      if (result.stopped) {
+        setToast(`已停止，已生成 ${completed} 张`)
+        setStickmanProgress(
+          `已停止 · 已完成 ${completed}/${stickmanShots.length} · 失败 ${failed}`
+        )
+        return
+      }
+      setToast(
+        failed
+          ? `已生成 ${completed} 张火柴人图，${failed} 张失败`
+          : `已生成 ${completed} 张火柴人图`
+      )
+      setStickmanProgress(
+        failed
+          ? `已完成 ${completed}/${stickmanShots.length} · 失败 ${failed}`
+          : ""
+      )
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "生成火柴人图失败")
+    } finally {
+      stopStickmanGenerationRef.current = false
+      setIsGeneratingStickmanImages(false)
+    }
   }
 
   const importVideoAsset = () => {
@@ -867,10 +1206,16 @@ function VideoFactoryShell() {
                     独立管理单条视频任务，按爆款来源、脚本、套餐、分镜、素材、配音、剪辑、发布和记录推进。
                   </p>
                 </div>
-                <Button onClick={createTask}>
-                  <Sparkles className="size-4" />
-                  新建任务
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={saveCurrentProgress}>
+                    <Save className="size-4" />
+                    保存进度
+                  </Button>
+                  <Button onClick={createTask}>
+                    <Sparkles className="size-4" />
+                    新建任务
+                  </Button>
+                </div>
               </div>
 
               <div className="grid gap-4">
@@ -909,13 +1254,25 @@ function VideoFactoryShell() {
             <ScriptAnalysisPanel
               topic={analysisTopic}
               draft={analysisDraft}
+              generating={isGeneratingAnalysis}
               onTopicChange={setAnalysisTopic}
               onGenerateDraft={generateAnalysisDraft}
-              onScriptChange={(value) =>
+              onScriptChange={(value) => {
                 setAnalysisDraft((current) =>
                   current ? { ...current, originalScript: value } : current
                 )
-              }
+                updateActiveTaskSnapshot((snapshot) => ({
+                  ...snapshot,
+                  source: {
+                    ...snapshot.source,
+                    userTopic: analysisTopic,
+                  },
+                  voice: {
+                    ...snapshot.voice,
+                    text: value,
+                  },
+                }))
+              }}
             />
 
             <StoryboardPanel
@@ -930,9 +1287,14 @@ function VideoFactoryShell() {
 
             <VideoAssetLibraryPanel
               assets={videoAssets}
+              generatingStickman={isGeneratingStickmanImages}
+              stickmanProgress={stickmanProgress}
+              stickmanShotCount={stickmanShotCount}
+              generatedStickmanShotCount={generatedStickmanShotCount}
               importKind={assetImportKind}
               importName={assetImportName}
               onGenerateStickman={generateStickmanAsset}
+              onStopStickman={stopStickmanGeneration}
               onImportKindChange={setAssetImportKind}
               onImportNameChange={setAssetImportName}
               onImportAsset={importVideoAsset}
@@ -944,7 +1306,11 @@ function VideoFactoryShell() {
               timeline={videoTimeline}
               storyboardCount={storyboardShots.length}
               assetCount={videoAssets.length}
+              ttsSettings={ttsSettings}
+              ttsStatus={ttsStatus}
               onAssembleTimeline={assembleTimeline}
+              onSaveTtsSettings={saveTtsSettings}
+              onCheckTtsSettings={checkTtsSettings}
             />
 
             <RenderExportPanel
@@ -1316,12 +1682,14 @@ function SourceCollectionPanel({
 function ScriptAnalysisPanel({
   topic,
   draft,
+  generating,
   onTopicChange,
   onGenerateDraft,
   onScriptChange,
 }: {
   topic: string
   draft: VideoAnalysisDraft | null
+  generating: boolean
   onTopicChange: (value: string) => void
   onGenerateDraft: () => void
   onScriptChange: (value: string) => void
@@ -1351,9 +1719,9 @@ function ScriptAnalysisPanel({
         </label>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={onGenerateDraft}>
+          <Button disabled={generating} onClick={onGenerateDraft}>
             <Sparkles className="size-4" />
-            生成结构和脚本
+            {generating ? "生成中" : "生成结构和脚本"}
           </Button>
           <span className="text-xs text-muted-foreground">
             使用当前文本模型 Profile；失败会保留手动编辑入口。
@@ -1607,23 +1975,37 @@ function StoryboardPanel({
 
 function VideoAssetLibraryPanel({
   assets,
+  generatingStickman,
+  stickmanProgress,
+  stickmanShotCount,
+  generatedStickmanShotCount,
   importKind,
   importName,
   onGenerateStickman,
+  onStopStickman,
   onImportKindChange,
   onImportNameChange,
   onImportAsset,
   onRemoveAsset,
 }: {
   assets: VideoAsset[]
+  generatingStickman: boolean
+  stickmanProgress: string
+  stickmanShotCount: number
+  generatedStickmanShotCount: number
   importKind: VideoAssetKind
   importName: string
-  onGenerateStickman: () => void
+  onGenerateStickman: () => void | Promise<void>
+  onStopStickman: () => void
   onImportKindChange: (value: VideoAssetKind) => void
   onImportNameChange: (value: string) => void
   onImportAsset: () => void
   onRemoveAsset: (assetId: string) => void
 }) {
+  const hasGeneratedStickman = generatedStickmanShotCount > 0
+  const hasRemainingStickman =
+    stickmanShotCount > 0 && generatedStickmanShotCount < stickmanShotCount
+
   return (
     <section className="rounded-lg border bg-background p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1639,10 +2021,30 @@ function VideoAssetLibraryPanel({
 
       <div className="grid gap-4">
         <div className="flex flex-wrap items-end gap-3">
-          <Button onClick={onGenerateStickman}>
+          <Button disabled={generatingStickman} onClick={onGenerateStickman}>
             <ImagePlus className="size-4" />
-            记录火柴人图
+            {generatingStickman
+              ? "生成中"
+              : hasRemainingStickman && hasGeneratedStickman
+                ? "继续未完成"
+                : "生成火柴人图"}
           </Button>
+          {generatingStickman ? (
+            <Button variant="outline" onClick={onStopStickman}>
+              <SquareStop className="size-4" />
+              停止生成
+            </Button>
+          ) : null}
+          {stickmanProgress ? (
+            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              {stickmanProgress}
+            </div>
+          ) : null}
+          {stickmanShotCount ? (
+            <div className="rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
+              火柴人图 {generatedStickmanShotCount}/{stickmanShotCount}
+            </div>
+          ) : null}
           <label className="grid min-w-44 gap-2">
             <span className="text-xs font-medium text-muted-foreground">
               素材类别
@@ -1679,12 +2081,26 @@ function VideoAssetLibraryPanel({
                 key={asset.id}
                 className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg border bg-muted/30 p-3"
               >
-                <div className="min-w-0">
+                <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
+                  {asset.kind.includes("image") && asset.previewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={asset.previewUrl}
+                      alt={asset.displayName}
+                      className="size-14 rounded-md border object-cover"
+                    />
+                  ) : (
+                    <div className="grid size-14 place-items-center rounded-md border bg-background text-muted-foreground">
+                      <ImagePlus className="size-4" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
                   <div className="truncate text-sm font-medium">
                     {asset.displayName}
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">
                     {asset.kind} · {asset.file.path}
+                  </div>
                   </div>
                 </div>
                 <Button
@@ -1712,16 +2128,23 @@ function TimelineAssemblyPanel({
   timeline,
   storyboardCount,
   assetCount,
+  ttsSettings,
+  ttsStatus,
   onAssembleTimeline,
+  onSaveTtsSettings,
+  onCheckTtsSettings,
 }: {
   voice: VoicePlan | null
   timeline: VideoTimeline | null
   storyboardCount: number
   assetCount: number
+  ttsSettings: VideoTtsSettings
+  ttsStatus: string
   onAssembleTimeline: () => void
+  onSaveTtsSettings: (settings: VideoTtsSettings) => void
+  onCheckTtsSettings: (settings?: VideoTtsSettings) => void
 }) {
   const timelineSeconds = timeline ? Math.round(timeline.durationMs / 1000) : 0
-
   return (
     <section className="rounded-lg border bg-background p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1739,6 +2162,14 @@ function TimelineAssemblyPanel({
       </div>
 
       <div className="grid gap-4">
+        <TtsSettingsEditor
+          key={`${ttsSettings.projectPath}:${ttsSettings.launchCommand}:${ttsSettings.launchArgs.join("\u0000")}`}
+          settings={ttsSettings}
+          status={ttsStatus}
+          onSave={onSaveTtsSettings}
+          onCheck={onCheckTtsSettings}
+        />
+
         <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
           <TimelineMetric label="分镜" value={`${storyboardCount}`} />
           <TimelineMetric label="素材" value={`${assetCount}`} />
@@ -1818,6 +2249,75 @@ function TimelineAssemblyPanel({
         )}
       </div>
     </section>
+  )
+}
+
+function TtsSettingsEditor({
+  settings,
+  status,
+  onSave,
+  onCheck,
+}: {
+  settings: VideoTtsSettings
+  status: string
+  onSave: (settings: VideoTtsSettings) => void
+  onCheck: (settings?: VideoTtsSettings) => void
+}) {
+  const [draft, setDraft] = useState(settings)
+  const launchPlan = createVideoTtsLaunchPlan(draft)
+
+  return (
+    <div className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium">本地 TTS 路径</div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            使用本机已安装的 IndexTTS2 工程；安装包只保存路径配置，不内置模型文件。
+          </p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-3 max-lg:grid-cols-1">
+        <TextField
+          label="IndexTTS2 工程目录"
+          value={draft.projectPath}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              projectPath: value,
+              embedModelInPackage: false,
+            }))
+          }
+        />
+        <TextField
+          label="启动命令"
+          value={draft.launchCommand}
+          onChange={(value) =>
+            setDraft((current) => ({
+              ...current,
+              launchCommand: value,
+              embedModelInPackage: false,
+            }))
+          }
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" onClick={() => onSave(draft)}>
+          <Save className="size-4" />
+          保存 TTS 配置
+        </Button>
+        <Button variant="outline" onClick={() => onCheck(draft)}>
+          <Search className="size-4" />
+          检测路径
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          模型目录保持外置，后续生成配音时从该路径启动本地服务或导入音频。
+        </span>
+      </div>
+      <div className="truncate rounded-md border bg-background px-2 py-1.5 font-mono text-xs text-muted-foreground">
+        {launchPlan.manualCommand}
+      </div>
+    </div>
   )
 }
 
@@ -2176,6 +2676,7 @@ function ApiProfileEditor({
       service: editingService,
       id: draft.id.trim() || `${editingService}-custom`,
       label: draft.label.trim() || apiProfileServiceLabels[editingService],
+      model: draft.model.trim(),
       apiBaseUrl: draft.apiBaseUrl.trim(),
       apiKey: draft.apiKey.trim(),
     })
@@ -2203,6 +2704,13 @@ function ApiProfileEditor({
           value={draft.apiBaseUrl}
           onChange={(value) =>
             setDraft((current) => ({ ...current, apiBaseUrl: value }))
+          }
+        />
+        <TextField
+          label="模型名"
+          value={draft.model}
+          onChange={(value) =>
+            setDraft((current) => ({ ...current, model: value }))
           }
         />
         <label className="grid gap-2">

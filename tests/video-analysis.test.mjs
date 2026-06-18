@@ -60,6 +60,7 @@ test("model request uses selected text profile and strips credentials from logs"
       service: "text_model",
       profileId: "text-main",
       apiBaseUrl: "https://text.example.com/v1",
+      model: "claude-opus-4-6-thinking",
       apiKey: fixtureCredential,
     },
     sourceText: "开头 3 秒制造焦虑，随后演示工具前后对比。",
@@ -69,10 +70,59 @@ test("model request uses selected text profile and strips credentials from logs"
   const logEntry = createScriptGenerationLogEntry(request)
 
   assert.equal(request.apiBaseUrl, "https://text.example.com/v1")
+  assert.equal(request.model, "claude-opus-4-6-thinking")
   assert.equal(request.apiKey, fixtureCredential)
   assert.match(JSON.stringify(request.messages), /原创短视频脚本/)
+  assert.match(JSON.stringify(request.messages), /严格按以下格式/)
   assert.equal(JSON.stringify(logEntry).includes(fixtureCredential), false)
   assert.equal(logEntry.profileId, "text-main")
+})
+
+test("model response can become an editable original script draft", async () => {
+  const { createModelVideoAnalysisDraft } = await importVideoAnalysisModule()
+  const draft = createModelVideoAnalysisDraft({
+    sourceText: "原文：每天熬夜剪视频，结果播放只有几十。",
+    modelText:
+      "【原创脚本 · 火柴人爆梗 · 45-60s】\n开头：别再硬剪了，先把爆点拆出来。\n痛点：你以为差的是软件，其实差的是节奏。\n演示：三秒钩子、十秒反差、最后给结果。\n转化：收藏这套火柴人爆款结构。",
+  })
+
+  assert.equal(draft.status, "ready_for_edit")
+  assert.equal(draft.editable, true)
+  assert.match(draft.originalScript, /别再硬剪/)
+  assert.match(draft.structureSummary.hook, /别再硬剪/)
+  assert.match(draft.structureSummary.rhythm, /45-60s/)
+  assert.ok(draft.sentenceTimeline.length >= 4)
+})
+
+test("structured model response separates analysis from original script", async () => {
+  const { createModelVideoAnalysisDraft } = await importVideoAnalysisModule()
+  const draft = createModelVideoAnalysisDraft({
+    sourceText: "原文：骨头怎么切、镜头怎么推。",
+    modelText: [
+      "结构摘要：",
+      "开头钩子：先把骨头切法这个冲突扔出来。",
+      "痛点放大：新手照着剪却不知道镜头顺序。",
+      "结果证明：按三段式做完就能直接出片。",
+      "结尾行动：保存这个火柴人结构。",
+      "可复用元素：三秒钩子、镜头推进、结尾口播",
+      "原创完整脚本：",
+      "开头：别再照抄别人的骨头梗，先把镜头顺序换掉。",
+      "痛点：你差的不是素材，是让观众看懂的节奏。",
+      "证明：三秒抛冲突，十秒拆步骤，最后给成片效果。",
+      "转化：收藏这套火柴人爆款结构，下一条直接套。",
+    ].join("\n"),
+  })
+
+  assert.match(draft.structureSummary.hook, /骨头切法/)
+  assert.match(draft.structureSummary.painPoint, /镜头顺序/)
+  assert.match(draft.structureSummary.proof, /三段式/)
+  assert.match(draft.originalScript, /^开头：别再照抄/)
+  assert.equal(draft.originalScript.includes("结构摘要"), false)
+  assert.deepEqual(draft.structureSummary.reusableElements, [
+    "三秒钩子",
+    "镜头推进",
+    "结尾口播",
+  ])
 })
 
 test("model failure returns manual edit fallback without blocking workflow", async () => {

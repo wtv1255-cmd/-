@@ -51,6 +51,14 @@ pnpm exec next dev --turbopack --port 48218
 
 `.env.local` 不再保存 CodexProxy 地址和密钥。
 
+视频工厂的“配音字幕和统一时间线”区域可以配置本机 TTS 工程路径。默认路径是：
+
+```text
+D:\Index-TTS2_ZZDH
+```
+
+这个路径指向用户机器上已经安装好的 IndexTTS2 项目。桌面安装包只保存路径、启动命令和检测结果，不会把 `checkpoints`、`venv` 或大模型文件复制进安装包。
+
 如果要打包给朋友并让首次启动自动带入默认 API 配置，可以把
 `desktop-default-api-settings.example.json` 复制为
 `desktop-default-api-settings.local.json` 后填写地址和 Key。这个 local

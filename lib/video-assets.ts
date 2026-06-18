@@ -1,5 +1,10 @@
 import type { ApiProfileRequestContext } from "@/lib/api-profiles"
-import type { VideoAsset, VideoAssetKind } from "@/lib/video-domain"
+import type { CodexImageResult } from "@/lib/types/image"
+import type {
+  StoryboardShot,
+  VideoAsset,
+  VideoAssetKind,
+} from "@/lib/video-domain"
 
 export type VideoAssetCategoryOption = {
   kind: VideoAssetKind
@@ -43,6 +48,44 @@ export type VideoAssetLogEntry = {
   apiKey?: never
 }
 
+export type GenerateStickmanStoryboardAssetInput = {
+  taskId: string
+  shot: StoryboardShot
+  profile: ApiProfileRequestContext
+  requestImages: (
+    request: VideoImageGenerationRequest
+  ) => Promise<CodexImageResult[]>
+  wait?: (ms: number) => Promise<void>
+  maxAttempts?: number
+  onAttempt?: (attempt: number, maxAttempts: number) => void
+}
+
+export type GeneratedStickmanStoryboardAsset = {
+  asset: VideoAsset
+  image: CodexImageResult
+  request: VideoImageGenerationRequest
+  attempts: number
+}
+
+export type RunStickmanImageGenerationQueueInput<T> = {
+  items: T[]
+  concurrency: number
+  worker: (item: T, index: number) => Promise<void>
+  shouldStop?: () => boolean
+}
+
+export type StickmanImageGenerationQueueResult<T> = {
+  completed: number
+  failed: number
+  stopped: boolean
+  fatalError?: Error
+  errors: Array<{
+    item: T
+    index: number
+    error: Error
+  }>
+}
+
 const VIDEO_TASK_FILE_ROOT = "%APPDATA%/她火/tasks"
 
 export const VIDEO_ASSET_CATEGORY_OPTIONS: VideoAssetCategoryOption[] = [
@@ -74,6 +117,89 @@ function cleanSegment(value: unknown, fallback: string) {
 function cleanNumber(value: unknown) {
   const number = Number(value)
   return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0
+}
+
+function isInsufficientBalanceError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : ""
+  return /余额不足|额度不足|balance|insufficient|quota/i.test(message)
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error || "未知错误"))
+}
+
+export async function runStickmanImageGenerationQueue<T>({
+  items,
+  concurrency,
+  worker,
+  shouldStop,
+}: RunStickmanImageGenerationQueueInput<T>): Promise<
+  StickmanImageGenerationQueueResult<T>
+> {
+  const queueConcurrency = Math.min(
+    Math.max(1, Math.floor(concurrency || 1)),
+    Math.max(1, items.length)
+  )
+  const errors: StickmanImageGenerationQueueResult<T>["errors"] = []
+  let completed = 0
+  let failed = 0
+  let nextIndex = 0
+  let stopped = false
+  let fatalError: Error | undefined
+
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      if (fatalError || shouldStop?.()) {
+        stopped = true
+        return
+      }
+
+      const index = nextIndex
+      nextIndex += 1
+      const item = items[index]
+
+      try {
+        await worker(item, index)
+        completed += 1
+      } catch (caught) {
+        const error = toError(caught)
+        failed += 1
+        errors.push({ item, index, error })
+        if (isInsufficientBalanceError(error)) {
+          fatalError = error
+          stopped = true
+        }
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: queueConcurrency }, () => runWorker()))
+
+  return {
+    completed,
+    failed,
+    stopped: stopped || Boolean(fatalError) || Boolean(shouldStop?.()),
+    fatalError,
+    errors,
+  }
+}
+
+function imageFilename(shot: StoryboardShot, image: CodexImageResult) {
+  const mimeType = cleanText(image.mimeType, "image/png")
+  const ext =
+    mimeType.includes("jpeg") || mimeType.includes("jpg")
+      ? "jpg"
+      : mimeType.includes("webp")
+        ? "webp"
+        : "png"
+  const shotNumber = shot.id.match(/\d+/u)?.[0] || "00"
+  const startSeconds = Math.round(shot.startMs / 1000)
+  const endSeconds = Math.round(shot.endMs / 1000)
+  return `${shotNumber.padStart(2, "0")}_${cleanSegment(
+    shot.id,
+    "shot"
+  )}_${startSeconds}-${endSeconds}s_stickman.${ext}`
 }
 
 export function createImportedVideoAsset({
@@ -110,17 +236,63 @@ export function buildVideoImageGenerationRequest({
   profile,
   prompt,
   negativePrompt,
-  model = "gpt-image-2-2K",
+  model = profile.model,
 }: BuildVideoImageGenerationRequestInput): VideoImageGenerationRequest {
   return {
     endpoint: "/api/codex/images/generations",
-    model,
+    model: cleanText(model, "gpt-image-2-2K"),
     prompt: cleanText(prompt, "黑白火柴人简笔线稿，白底黑线"),
     negativePrompt: cleanText(negativePrompt, "复杂背景，写实人物，水印"),
     apiBaseUrl: profile.apiBaseUrl,
     apiKey: profile.apiKey,
     profileId: profile.profileId,
   }
+}
+
+export async function generateStickmanStoryboardAsset({
+  taskId,
+  shot,
+  profile,
+  requestImages,
+  wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+  maxAttempts = 3,
+  onAttempt,
+}: GenerateStickmanStoryboardAssetInput): Promise<GeneratedStickmanStoryboardAsset> {
+  const request = buildVideoImageGenerationRequest({
+    profile,
+    prompt: shot.prompt || shot.visualDescription || shot.voiceText,
+    negativePrompt: shot.negativePrompt,
+  })
+  let lastError: unknown
+  const attempts = Math.max(1, Math.floor(maxAttempts))
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      onAttempt?.(attempt, attempts)
+      const images = await requestImages(request)
+      const image = images[0]
+      if (!image) throw new Error("接口没有返回图片")
+
+      return {
+        asset: createImportedVideoAsset({
+          taskId,
+          kind: "stickman_image",
+          filename: imageFilename(shot, image),
+          mimeType: cleanText(image.mimeType, "image/png"),
+          tags: [shot.id, "generated_image", profile.profileId],
+        }),
+        image,
+        request,
+        attempts: attempt,
+      }
+    } catch (error) {
+      lastError = error
+      if (isInsufficientBalanceError(error) || attempt === attempts) break
+      await wait(1200 * attempt)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("生成火柴人图失败")
 }
 
 export function createVideoAssetLogEntry(

@@ -45,6 +45,7 @@ test("api profile store supports text image video and publish service groups", a
     service: "text_model",
     label: "文本主模型",
     apiBaseUrl: "https://text.example.com/v1/",
+    model: " claude-opus-4-6-thinking ",
     apiKey: " fixture-text-secret ",
   })
 
@@ -56,6 +57,7 @@ test("api profile store supports text image video and publish service groups", a
   ])
   assert.equal(store.activeProfileByService.text_model, "text-main")
   assert.equal(resolveApiProfile(store, "text_model").apiBaseUrl, "https://text.example.com/v1")
+  assert.equal(resolveApiProfile(store, "text_model").model, "claude-opus-4-6-thinking")
   assert.equal(resolveApiProfile(store, "text_model").apiKey, "fixture-text-secret")
 })
 
@@ -82,6 +84,7 @@ test("api profile export and task logs never include credentials", async () => {
   const logText = JSON.stringify(logEntry)
 
   assert.equal(requestContext.apiKey, "fixture-video-secret")
+  assert.equal(requestContext.model, "video_parsing-default")
   assert.equal(exportedText.includes("fixture-video-secret"), false)
   assert.equal(logText.includes("fixture-video-secret"), false)
   assert.equal(logEntry.configured, true)

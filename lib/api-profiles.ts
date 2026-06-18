@@ -8,6 +8,7 @@ export type ApiProfile = {
   id: string
   service: ApiProfileService
   label: string
+  model: string
   apiBaseUrl: string
   apiKey: string
 }
@@ -29,6 +30,7 @@ export type SafeApiProfileStore = Omit<ApiProfileStore, "profiles"> & {
 export type ApiProfileRequestContext = {
   service: ApiProfileService
   profileId: string
+  model: string
   apiBaseUrl: string
   apiKey: string
 }
@@ -65,6 +67,13 @@ const SERVICE_LABEL_BY_SERVICE: Record<ApiProfileService, string> = {
   publish_helper: "发布辅助",
 }
 
+const DEFAULT_MODEL_BY_SERVICE: Record<ApiProfileService, string> = {
+  text_model: "claude-opus-4-6-thinking",
+  image_generation: "gpt-image-2-2K",
+  video_parsing: "video_parsing-default",
+  publish_helper: "publish_helper-default",
+}
+
 function emptyProfiles(): Record<ApiProfileService, ApiProfile[]> {
   return {
     text_model: [],
@@ -90,6 +99,11 @@ function cleanApiBaseUrl(value: unknown, fallback = "") {
 
 function cleanApiKey(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function cleanModel(value: unknown, fallback: string) {
+  const raw = typeof value === "string" ? value.trim() : ""
+  return raw || fallback
 }
 
 function cleanId(value: unknown, fallback: string) {
@@ -121,6 +135,7 @@ function normalizeProfile(
       typeof raw.label === "string" && raw.label.trim()
         ? raw.label.trim()
         : SERVICE_LABEL_BY_SERVICE[service],
+    model: cleanModel(raw.model, DEFAULT_MODEL_BY_SERVICE[service]),
     apiBaseUrl: cleanApiBaseUrl(raw.apiBaseUrl, DEFAULT_API_BASE_BY_SERVICE[service]),
     apiKey: cleanApiKey(raw.apiKey),
   }
@@ -136,6 +151,7 @@ export function createDefaultApiProfileStore(): ApiProfileStore {
         id: `${service}-default`,
         service,
         label: `${SERVICE_LABEL_BY_SERVICE[service]}默认配置`,
+        model: DEFAULT_MODEL_BY_SERVICE[service],
         apiBaseUrl: DEFAULT_API_BASE_BY_SERVICE[service],
         apiKey: "",
       },
@@ -252,6 +268,7 @@ export function buildApiProfileRequestContext(
   return {
     service,
     profileId: profile.id,
+    model: profile.model,
     apiBaseUrl: profile.apiBaseUrl,
     apiKey: profile.apiKey,
   }

@@ -11,6 +11,10 @@
 # testing
 /coverage
 
+# local agent/tool state
+/.codegraph/
+/.superpowers/
+
 # next.js
 /.next/
 /out/

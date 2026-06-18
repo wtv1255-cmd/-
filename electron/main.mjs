@@ -11,6 +11,11 @@ import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import {
+  createTaskAssetFileIpcHandler,
+  createTaskAssetPreviewIpcHandler,
+} from "./task-file-store.mjs"
+import { createLocalTtsProjectIpcHandler } from "./local-tts-project.mjs"
 import { createVideoRendererIpcHandler } from "./video-renderer.mjs"
 
 const PREFERRED_FRONTEND_PORT = 48218
@@ -67,6 +72,11 @@ ipcMain.handle("ta-huo:read-default-api-settings", () => {
     return null
   }
 })
+
+ipcMain.handle(
+  "ta-huo:check-local-tts-project",
+  createLocalTtsProjectIpcHandler()
+)
 
 function readDownloadDirectory() {
   try {
@@ -183,6 +193,14 @@ ipcMain.handle("ta-huo:save-file-to-downloads", async (_event, input) => {
 ipcMain.handle(
   "ta-huo:render-video-with-ffmpeg",
   createVideoRendererIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:save-task-asset-file",
+  createTaskAssetFileIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:read-task-asset-preview",
+  createTaskAssetPreviewIpcHandler(app.getPath("userData"))
 )
 
 function logStartup(message) {

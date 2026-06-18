@@ -69,6 +69,7 @@ test("image generation request uses image profile and sanitized logs", async () 
       service: "image_generation",
       profileId: "image-main",
       apiBaseUrl: "https://image.example.com/v1",
+      model: "gpt-image-2-4K",
       apiKey: fixtureCredential,
     },
     prompt: "黑白火柴人白底黑线，震惊表情",
@@ -77,9 +78,153 @@ test("image generation request uses image profile and sanitized logs", async () 
   const logEntry = createVideoAssetLogEntry(request)
 
   assert.equal(request.apiBaseUrl, "https://image.example.com/v1")
+  assert.equal(request.model, "gpt-image-2-4K")
   assert.equal(request.apiKey, fixtureCredential)
   assert.equal(JSON.stringify(logEntry).includes(fixtureCredential), false)
   assert.equal(logEntry.profileId, "image-main")
+})
+
+test("stickman storyboard image generation retries transient failures", async () => {
+  const { generateStickmanStoryboardAsset } = await importVideoAssetsModule()
+  let attempts = 0
+  const result = await generateStickmanStoryboardAsset({
+    taskId: "task_01",
+    shot: {
+      id: "shot_01",
+      startMs: 0,
+      endMs: 2000,
+      voiceText: "开头",
+      visualType: "stickman",
+      visualDescription: "火柴人震惊",
+      prompt: "黑白火柴人震惊表情",
+      negativePrompt: "复杂背景",
+      assetIds: [],
+      status: "needs_asset",
+    },
+    profile: {
+      service: "image_generation",
+      profileId: "image-main",
+      apiBaseUrl: "https://image.example.com/v1",
+      model: "gpt-image-2-4K",
+      apiKey: "fixture",
+    },
+    requestImages: async () => {
+      attempts += 1
+      if (attempts < 3) throw new Error("HTTP 502")
+      return [{ id: "img_01", dataUrl: "data:image/png;base64,AA==", mimeType: "image/png" }]
+    },
+    wait: async () => {},
+  })
+
+  assert.equal(attempts, 3)
+  assert.equal(result.asset.kind, "stickman_image")
+  assert.equal(result.asset.file.filename, "01_shot_01_0-2s_stickman.png")
+  assert.deepEqual(result.asset.tags, ["shot_01", "generated_image", "image-main"])
+  assert.equal(result.image.dataUrl, "data:image/png;base64,AA==")
+})
+
+test("stickman storyboard image generation stops immediately on insufficient balance", async () => {
+  const { generateStickmanStoryboardAsset } = await importVideoAssetsModule()
+  let attempts = 0
+
+  await assert.rejects(
+    () =>
+      generateStickmanStoryboardAsset({
+        taskId: "task_01",
+        shot: {
+          id: "shot_01",
+          startMs: 0,
+          endMs: 2000,
+          voiceText: "开头",
+          visualType: "stickman",
+          visualDescription: "火柴人震惊",
+          prompt: "黑白火柴人震惊表情",
+          negativePrompt: "复杂背景",
+          assetIds: [],
+          status: "needs_asset",
+        },
+        profile: {
+          service: "image_generation",
+          profileId: "image-main",
+          apiBaseUrl: "https://image.example.com/v1",
+          model: "gpt-image-2-4K",
+          apiKey: "fixture",
+        },
+        requestImages: async () => {
+          attempts += 1
+          throw new Error("余额不足，请充值")
+        },
+        wait: async () => {},
+      }),
+    /余额不足/
+  )
+
+  assert.equal(attempts, 1)
+})
+
+test("stickman image queue runs up to the configured concurrency", async () => {
+  const { runStickmanImageGenerationQueue } = await importVideoAssetsModule()
+  let active = 0
+  let maxActive = 0
+
+  const result = await runStickmanImageGenerationQueue({
+    items: Array.from({ length: 20 }, (_, index) => index + 1),
+    concurrency: 8,
+    worker: async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+    },
+  })
+
+  assert.equal(maxActive, 8)
+  assert.equal(result.completed, 20)
+  assert.equal(result.failed, 0)
+})
+
+test("stickman image queue stops dispatching after stop is requested", async () => {
+  const { runStickmanImageGenerationQueue } = await importVideoAssetsModule()
+  let stopRequested = false
+  const started = []
+
+  const result = await runStickmanImageGenerationQueue({
+    items: [1, 2, 3, 4, 5, 6],
+    concurrency: 3,
+    shouldStop: () => stopRequested,
+    worker: async (item) => {
+      started.push(item)
+      if (item === 1) {
+        stopRequested = true
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    },
+  })
+
+  assert.deepEqual(started, [1])
+  assert.equal(result.stopped, true)
+  assert.equal(result.completed, started.length)
+})
+
+test("stickman image queue stops dispatching after insufficient balance", async () => {
+  const { runStickmanImageGenerationQueue } = await importVideoAssetsModule()
+  const started = []
+
+  const result = await runStickmanImageGenerationQueue({
+    items: [1, 2, 3, 4, 5],
+    concurrency: 2,
+    worker: async (item) => {
+      started.push(item)
+      if (item === 1) throw new Error("余额不足，请充值")
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    },
+  })
+
+  assert.deepEqual(started.sort(), [1, 2])
+  assert.equal(result.stopped, true)
+  assert.equal(result.failed, 1)
+  assert.match(result.fatalError.message, /余额不足/)
 })
 
 test("removing an imported asset does not delete unrelated asset records", async () => {

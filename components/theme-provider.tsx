@@ -8,6 +8,13 @@ declare global {
     promptCenterDesktop?: {
       setTheme: (theme: "light" | "dark") => void
       readDefaultApiSettings?: () => Promise<unknown>
+      checkLocalTtsProject?: (input: { projectPath: string }) => Promise<{
+        ok: boolean
+        exists?: boolean
+        projectPath?: string
+        missing?: string[]
+        error?: string
+      }>
       saveFileToDownloads?: (input: {
         filename: string
         mimeType?: string
@@ -16,6 +23,33 @@ declare global {
         canceled?: boolean
         filePath?: string
         directory?: string
+        error?: string
+      }>
+      saveTaskAssetFile?: (input: {
+        taskId: string
+        kind: string
+        filename: string
+        mimeType?: string
+        data: ArrayBuffer
+      }) => Promise<{
+        ok: boolean
+        taskId?: string
+        filename?: string
+        filePath?: string
+        bytes?: number
+        mimeType?: string
+        dataUrl?: string
+        error?: string
+      }>
+      readTaskAssetPreview?: (input: {
+        filePath: string
+        mimeType?: string
+      }) => Promise<{
+        ok: boolean
+        filePath?: string
+        bytes?: number
+        mimeType?: string
+        dataUrl?: string
         error?: string
       }>
       renderVideoWithFfmpeg?: (input: {

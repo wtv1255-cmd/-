@@ -75,6 +75,7 @@ export type VideoAsset = {
   kind: VideoAssetKind
   displayName: string
   file: TaskFileRef
+  previewUrl?: string
   tags?: string[]
   durationMs?: number
   width?: number

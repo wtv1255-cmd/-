@@ -60,8 +60,8 @@ export const TA_HUO_LICENSE_PUBLIC_KEY_JWK: JsonWebKey = {
   key_ops: ["verify"],
   ext: true,
   kty: "EC",
-  x: "Kc5uwI-Pwim65gkm6WM0MHjKoZ6J8dWj8pmX7sYDiQ0",
-  y: "zuwlucdeFYhGMuq2J_MxiuRhUMIanFpOtIbz7-mWWbc",
+  x: "62WQwJjbThTZvIyDj1i86YlQ2ck6ygnxYZbpJh_IvmE",
+  y: "IltPDe40s72wU_fUr4PKYx_zOYGcUD61kCqIK6GKeBA",
   crv: "P-256",
 }
 

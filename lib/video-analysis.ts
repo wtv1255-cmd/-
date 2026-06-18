@@ -71,6 +71,11 @@ export type CreateScriptGenerationFailureDraftInput = {
   reason: string
 }
 
+export type CreateModelVideoAnalysisDraftInput = {
+  sourceText: string
+  modelText: string
+}
+
 const structureLabels = [
   ["hook", "开头钩子"],
   ["pain", "痛点放大"],
@@ -83,6 +88,18 @@ const structureLabels = [
 function cleanText(value: unknown, fallback = "") {
   const text =
     typeof value === "string" ? value.replace(/\s+/g, " ").trim() : ""
+  return text || fallback
+}
+
+function cleanScriptText(value: unknown, fallback = "") {
+  const text =
+    typeof value === "string"
+      ? value
+          .split(/\r?\n/u)
+          .map((line) => line.replace(/\s+/g, " ").trim())
+          .filter(Boolean)
+          .join("\n")
+      : ""
   return text || fallback
 }
 
@@ -128,6 +145,100 @@ function buildOriginalScript(
   ].join("\n")
 }
 
+function readLineAfterLabel(script: string, labels: string[]) {
+  const lines = script
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  for (const label of labels) {
+    const found = lines.find((line) => line.startsWith(label))
+    if (found) return found.replace(label, "").trim()
+  }
+
+  return lines.find((line) => !line.startsWith("【")) || ""
+}
+
+function findLabeledLine(script: string, labels: string[]) {
+  const lines = script
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  for (const label of labels) {
+    const found = lines.find((line) => line.startsWith(label))
+    if (found) return found.replace(label, "").trim()
+  }
+
+  return ""
+}
+
+function readReusableElements(script: string) {
+  const value = findLabeledLine(script, ["可复用元素：", "复用元素："])
+  if (!value) return []
+  return value
+    .split(/[、,，/｜|]/u)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function extractOriginalScript(script: string) {
+  const markerMatch = script.match(/(?:原创完整脚本|完整脚本|原创脚本)[:：]\s*/u)
+  if (!markerMatch || markerMatch.index === undefined) return script
+
+  const start = markerMatch.index + markerMatch[0].length
+  const extracted = script.slice(start).trim()
+  return extracted || script
+}
+
+function buildStructureSummaryFromScript(
+  sourceText: string,
+  script: string
+): ViralStructureSummary {
+  const fallback = buildStructureSummary(sourceText)
+  const hook =
+    findLabeledLine(script, ["开头钩子："]) ||
+    readLineAfterLabel(script, ["开头：", "钩子："])
+  const painPoint = readLineAfterLabel(script, ["痛点放大：", "痛点："])
+  const demo = readLineAfterLabel(script, ["演示过程：", "演示："])
+  const proof = readLineAfterLabel(script, ["结果证明：", "证明："])
+  const conversion = readLineAfterLabel(script, [
+    "结尾行动：",
+    "转化：",
+    "结尾：",
+    "行动：",
+  ])
+  const title = script.match(/【(.+?)】/u)?.[1] || ""
+  const reusableElements = readReusableElements(script)
+
+  return {
+    ...fallback,
+    hook: hook || fallback.hook,
+    painPoint: painPoint || fallback.painPoint,
+    proof: proof || fallback.proof,
+    conversion: conversion || fallback.conversion,
+    rhythm: title || fallback.rhythm,
+    reusableElements: reusableElements.length
+      ? reusableElements
+      : fallback.reusableElements,
+    sections: fallback.sections.map((section) => ({
+      ...section,
+      summary:
+        section.id === "hook" && hook
+          ? hook
+          : section.id === "pain" && painPoint
+            ? painPoint
+            : section.id === "proof" && proof
+              ? proof
+              : section.id === "conversion" && conversion
+                ? conversion
+                : section.id === "demo" && demo
+                  ? demo
+                  : section.summary,
+    })),
+  }
+}
+
 function buildSentenceTimeline(script: string) {
   return script
     .split(/\n+/)
@@ -140,6 +251,33 @@ function buildSentenceTimeline(script: string) {
       endMs: (index + 1) * 7000,
       text,
     }))
+}
+
+export function createModelVideoAnalysisDraft({
+  sourceText,
+  modelText,
+}: CreateModelVideoAnalysisDraftInput): VideoAnalysisDraft {
+  const cleanedSource = cleanText(sourceText, "用户提供来源")
+  const modelScript = cleanScriptText(modelText)
+  const originalScript = cleanScriptText(extractOriginalScript(modelScript))
+  const fallbackScript = buildOriginalScript(
+    cleanedSource,
+    "stickman_meme",
+    "45-60s"
+  )
+  const script = originalScript || fallbackScript
+
+  return {
+    status: "ready_for_edit",
+    editable: true,
+    sourceText: cleanedSource,
+    structureSummary: buildStructureSummaryFromScript(
+      cleanedSource,
+      modelScript || script
+    ),
+    sentenceTimeline: buildSentenceTimeline(script),
+    originalScript: script,
+  }
 }
 
 export function createManualVideoAnalysisDraft({
@@ -164,16 +302,16 @@ export function buildScriptGenerationRequest({
   sourceText,
   durationPreset,
   packageId,
-  model = "gpt-5.5",
+  model = profile.model,
 }: BuildScriptGenerationRequestInput): ScriptGenerationRequest {
   const cleanedSource = cleanText(sourceText, "无转写内容，按用户主题生成")
   return {
-    model,
+    model: model.trim() || "claude-opus-4-6-thinking",
     messages: [
       {
         role: "system",
         content:
-          "你是她火视频工厂的脚本分析助手，只做结构分析和原创改写，不能搬运原视频画面或原文案。",
+          "你是她火视频工厂的爆款短视频脚本助手，只做结构分析和原创改写，不能搬运原视频画面或原文案。",
       },
       {
         role: "user",
@@ -181,7 +319,16 @@ export function buildScriptGenerationRequest({
           "请基于以下来源生成原创短视频脚本。",
           `套餐：${packageLabel(packageId)}`,
           `目标时长：${durationPreset}`,
-          "输出：爆款结构摘要、可复用钩子、原创完整脚本。",
+          "不要直接复述来源文案，要先提炼结构，再改成一条新的火柴人爆款口播。",
+          "严格按以下格式输出，字段名不要改：",
+          "结构摘要：",
+          "开头钩子：",
+          "痛点放大：",
+          "演示过程：",
+          "结果证明：",
+          "结尾行动：",
+          "可复用元素：三秒钩子、前后对比、步骤清单",
+          "原创完整脚本：",
           `来源内容：${cleanedSource}`,
         ].join("\n"),
       },
