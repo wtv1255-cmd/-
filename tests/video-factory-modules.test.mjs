@@ -80,3 +80,14 @@ test("asset module exposes manual external material labels and timeline placehol
   assert.match(source, /requiredMaterialLabel/)
   assert.match(source, /externalAssets/)
 })
+
+test("voice module exposes local tts voice presets and manual audio fallback", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /COMMON_VIDEO_TTS_VOICE_PRESETS/)
+  assert.match(source, /全局默认音色/)
+  assert.match(source, /任务临时音色/)
+  assert.match(source, /手动音频/)
+  assert.match(source, /onTaskVoicePresetChange/)
+  assert.match(source, /resolveVideoTtsVoiceSelection/)
+})

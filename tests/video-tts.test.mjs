@@ -70,3 +70,68 @@ test("video tts settings normalize custom paths without enabling model bundling"
   assert.deepEqual(settings.launchArgs, ["--port", "7861"])
   assert.equal(settings.embedModelInPackage, false)
 })
+
+test("voice presets allow global defaults and task-level overrides without bundling voices", async () => {
+  const {
+    COMMON_VIDEO_TTS_VOICE_PRESETS,
+    createDefaultVideoTtsSettings,
+    resolveVideoTtsVoiceSelection,
+    sanitizeVideoTtsSettingsForExport,
+  } = await importVideoTtsModule()
+  const settings = createDefaultVideoTtsSettings()
+  const taskSelection = resolveVideoTtsVoiceSelection({
+    settings,
+    taskVoicePresetId: "energetic_female",
+  })
+  const fallbackSelection = resolveVideoTtsVoiceSelection({
+    settings: {
+      ...settings,
+      defaultVoicePresetId: "calm_male",
+      taskVoicePresetId: "storyteller_female",
+    },
+  })
+  const safe = sanitizeVideoTtsSettingsForExport(settings)
+
+  assert.deepEqual(
+    COMMON_VIDEO_TTS_VOICE_PRESETS.map((preset) => preset.id),
+    [
+      "recommended_female",
+      "energetic_female",
+      "calm_male",
+      "storyteller_female",
+    ]
+  )
+  assert.equal(settings.defaultVoicePresetId, "recommended_female")
+  assert.equal(taskSelection.id, "energetic_female")
+  assert.equal(fallbackSelection.id, "storyteller_female")
+  assert.equal(JSON.stringify(safe).includes("voiceModelPath"), false)
+  assert.equal(JSON.stringify(safe).includes("checkpoint"), false)
+})
+
+test("unavailable local tts pauses only the tts step and preserves existing task content", async () => {
+  const { createVideoTtsUnavailablePause } = await importVideoTtsModule()
+  const task = {
+    id: "task_01",
+    workflow: [
+      { id: "script", state: "done" },
+      { id: "storyboard", state: "done" },
+      { id: "assets", state: "done" },
+      { id: "voice", state: "active" },
+      { id: "edit", state: "locked" },
+    ],
+    voice: { text: "原脚本", subtitles: [] },
+    storyboard: [{ id: "shot_01" }],
+    assets: [{ id: "asset_01" }],
+  }
+  const paused = createVideoTtsUnavailablePause({
+    task,
+    reason: "missing checkpoints",
+  })
+
+  assert.equal(paused.workflow.find((step) => step.id === "voice").state, "queued")
+  assert.equal(paused.workflow.find((step) => step.id === "script").state, "done")
+  assert.deepEqual(paused.voice, task.voice)
+  assert.deepEqual(paused.storyboard, task.storyboard)
+  assert.deepEqual(paused.assets, task.assets)
+  assert.match(paused.ttsStatus, /missing checkpoints/)
+})

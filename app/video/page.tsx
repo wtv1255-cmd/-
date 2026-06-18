@@ -116,10 +116,13 @@ import {
   createVoicePlanFromScript,
 } from "@/lib/video-timeline"
 import {
+  COMMON_VIDEO_TTS_VOICE_PRESETS,
   createDefaultVideoTtsSettings,
   createVideoTtsLaunchPlan,
+  resolveVideoTtsVoiceSelection,
   readVideoTtsSettings,
   saveVideoTtsSettings,
+  type VideoTtsVoicePresetId,
   type VideoTtsSettings,
 } from "@/lib/video-tts"
 import {
@@ -272,6 +275,8 @@ function VideoFactoryShell() {
   const [ttsSettings, setTtsSettings] = useState<VideoTtsSettings>(
     createDefaultVideoTtsSettings
   )
+  const [taskVoicePresetId, setTaskVoicePresetId] =
+    useState<VideoTtsVoicePresetId | "">("")
   const [ttsStatus, setTtsStatus] = useState("未检测本地 TTS")
   const [videoTimeline, setVideoTimeline] = useState<VideoTimeline | null>(null)
   const [requestedRenderEngine, setRequestedRenderEngine] =
@@ -299,7 +304,9 @@ function VideoFactoryShell() {
         setTasks(restoredTasks)
         setActiveTaskId(restoredTasks[0]?.id || "")
         setApiProfiles(readApiProfileStore())
-        setTtsSettings(readVideoTtsSettings())
+        const restoredTtsSettings = readVideoTtsSettings()
+        setTtsSettings(restoredTtsSettings)
+        setTaskVoicePresetId(restoredTtsSettings.taskVoicePresetId || "")
         const restoredScriptSettings = readScriptWorkflowSettings()
         setScriptWorkflowSettings(restoredScriptSettings)
         setScriptRewriteMode(restoredScriptSettings.fullAutoRewriteMode)
@@ -332,6 +339,7 @@ function VideoFactoryShell() {
         setAnalysisDraft(null)
         setStoryboardShots([])
         setVideoAssets([])
+        setTaskVoicePresetId("")
         setStickmanProgress("")
         setVoicePlan(null)
         setVideoTimeline(null)
@@ -401,10 +409,19 @@ function VideoFactoryShell() {
   }
 
   const saveTtsSettings = (settings: VideoTtsSettings) => {
-    setTtsSettings(settings)
-    saveVideoTtsSettings(settings)
+    const nextSettings = {
+      ...settings,
+      taskVoicePresetId: undefined,
+    }
+    setTtsSettings(nextSettings)
+    saveVideoTtsSettings(nextSettings)
     setTtsStatus("本地 TTS 配置已保存")
     setToast("TTS 路径配置已保存")
+  }
+
+  const updateTaskVoicePreset = (value: VideoTtsVoicePresetId | "") => {
+    setTaskVoicePresetId(value)
+    setToast(value ? "已设置任务临时音色" : "已恢复全局默认音色")
   }
 
   const saveScriptWorkflowPreference = (mode: ScriptRewriteMode) => {
@@ -1193,7 +1210,13 @@ function VideoFactoryShell() {
       taskId: activeTask.id,
       script: analysisDraft.originalScript,
       durationPreset: selectedDuration,
-      audioFilename: "voice.wav",
+      audioFilename:
+        ttsSettings.engine === "manual_audio"
+          ? "manual-audio.wav"
+          : `${resolveVideoTtsVoiceSelection({
+              settings: ttsSettings,
+              taskVoicePresetId,
+            }).id}.wav`,
     })
     const visualAssets = videoAssets.filter((asset) =>
       ["stickman_image", "yanling_clip", "showcase_clip"].includes(asset.kind)
@@ -1620,9 +1643,11 @@ function VideoFactoryShell() {
                 storyboardCount={storyboardShots.length}
                 assetCount={videoAssets.length}
                 ttsSettings={ttsSettings}
+                taskVoicePresetId={taskVoicePresetId}
                 ttsStatus={ttsStatus}
                 onAssembleTimeline={assembleTimeline}
                 onSaveTtsSettings={saveTtsSettings}
+                onTaskVoicePresetChange={updateTaskVoicePreset}
                 onCheckTtsSettings={checkTtsSettings}
               />
             ) : null}
@@ -2823,9 +2848,11 @@ function TimelineAssemblyPanel({
   storyboardCount,
   assetCount,
   ttsSettings,
+  taskVoicePresetId,
   ttsStatus,
   onAssembleTimeline,
   onSaveTtsSettings,
+  onTaskVoicePresetChange,
   onCheckTtsSettings,
 }: {
   voice: VoicePlan | null
@@ -2833,12 +2860,18 @@ function TimelineAssemblyPanel({
   storyboardCount: number
   assetCount: number
   ttsSettings: VideoTtsSettings
+  taskVoicePresetId: VideoTtsVoicePresetId | ""
   ttsStatus: string
   onAssembleTimeline: () => void
   onSaveTtsSettings: (settings: VideoTtsSettings) => void
+  onTaskVoicePresetChange: (value: VideoTtsVoicePresetId | "") => void
   onCheckTtsSettings: (settings?: VideoTtsSettings) => void
 }) {
   const timelineSeconds = timeline ? Math.round(timeline.durationMs / 1000) : 0
+  const selectedVoice = resolveVideoTtsVoiceSelection({
+    settings: ttsSettings,
+    taskVoicePresetId,
+  })
   return (
     <section className="rounded-lg border bg-background p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -2859,12 +2892,14 @@ function TimelineAssemblyPanel({
         <TtsSettingsEditor
           key={`${ttsSettings.projectPath}:${ttsSettings.launchCommand}:${ttsSettings.launchArgs.join("\u0000")}`}
           settings={ttsSettings}
+          taskVoicePresetId={taskVoicePresetId}
           status={ttsStatus}
           onSave={onSaveTtsSettings}
+          onTaskVoicePresetChange={onTaskVoicePresetChange}
           onCheck={onCheckTtsSettings}
         />
 
-        <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
+        <div className="grid grid-cols-5 gap-3 max-xl:grid-cols-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
           <TimelineMetric label="分镜" value={`${storyboardCount}`} />
           <TimelineMetric label="素材" value={`${assetCount}`} />
           <TimelineMetric
@@ -2875,6 +2910,7 @@ function TimelineAssemblyPanel({
             label="时长"
             value={timeline ? `${timelineSeconds}s` : "--"}
           />
+          <TimelineMetric label="音色" value={selectedVoice.label} />
         </div>
 
         {voice || timeline ? (
@@ -2948,17 +2984,25 @@ function TimelineAssemblyPanel({
 
 function TtsSettingsEditor({
   settings,
+  taskVoicePresetId,
   status,
   onSave,
+  onTaskVoicePresetChange,
   onCheck,
 }: {
   settings: VideoTtsSettings
+  taskVoicePresetId: VideoTtsVoicePresetId | ""
   status: string
   onSave: (settings: VideoTtsSettings) => void
+  onTaskVoicePresetChange: (value: VideoTtsVoicePresetId | "") => void
   onCheck: (settings?: VideoTtsSettings) => void
 }) {
   const [draft, setDraft] = useState(settings)
   const launchPlan = createVideoTtsLaunchPlan(draft)
+  const selectedVoice = resolveVideoTtsVoiceSelection({
+    settings: draft,
+    taskVoicePresetId,
+  })
 
   return (
     <div className="grid gap-3 rounded-lg border bg-muted/30 p-3">
@@ -2971,7 +3015,70 @@ function TtsSettingsEditor({
         </div>
         <StatusBadge status={status} />
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-3 max-lg:grid-cols-1">
+      <div className="grid grid-cols-3 gap-3 max-lg:grid-cols-1">
+        <label className="grid gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            TTS 模式
+          </span>
+          <select
+            value={draft.engine}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                engine: event.target.value as VideoTtsSettings["engine"],
+                embedModelInPackage: false,
+              }))
+            }
+            className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+          >
+            <option value="local_indextts2">本地 IndexTTS2</option>
+            <option value="manual_audio">手动音频</option>
+          </select>
+        </label>
+        <label className="grid gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            全局默认音色
+          </span>
+          <select
+            value={draft.defaultVoicePresetId}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                defaultVoicePresetId: event.target
+                  .value as VideoTtsVoicePresetId,
+                embedModelInPackage: false,
+              }))
+            }
+            className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+          >
+            {COMMON_VIDEO_TTS_VOICE_PRESETS.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            任务临时音色
+          </span>
+          <select
+            value={taskVoicePresetId}
+            onChange={(event) =>
+              onTaskVoicePresetChange(
+                event.target.value as VideoTtsVoicePresetId | ""
+              )
+            }
+            className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+          >
+            <option value="">使用全局默认</option>
+            {COMMON_VIDEO_TTS_VOICE_PRESETS.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <TextField
           label="IndexTTS2 工程目录"
           value={draft.projectPath}
@@ -2994,6 +3101,9 @@ function TtsSettingsEditor({
             }))
           }
         />
+      </div>
+      <div className="rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
+        当前音色：{selectedVoice.label} · {selectedVoice.description} · 手动音频模式下可跳过本地 TTS。
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" onClick={() => onSave(draft)}>
