@@ -243,3 +243,49 @@ test("failover executor continues on backup success and records sanitized attemp
   assert.equal(serialized.includes("secret-image-primary"), false)
   assert.equal(serialized.includes("secret-image-backup"), false)
 })
+
+test("failover executor treats missing primary credentials as retryable for configured backup", async () => {
+  const {
+    createDefaultApiProfileStore,
+    upsertApiProfile,
+    createApiFailoverPlan,
+    runApiProfileFailover,
+  } = await importApiProfilesModule()
+  let store = createDefaultApiProfileStore()
+  store = upsertApiProfile(store, {
+    id: "text-primary",
+    service: "text_model",
+    label: "文本主路由",
+    apiBaseUrl: "https://text-primary.example.com/v1",
+    model: "claude-opus-4-6-thinking",
+    apiKey: "",
+  })
+  store = upsertApiProfile(store, {
+    id: "text-backup",
+    service: "text_model",
+    label: "文本备份路由",
+    apiBaseUrl: "https://text-backup.example.com/v1",
+    model: "deepseek-reasoner",
+    apiKey: "secret-text-backup",
+  })
+  const plan = createApiFailoverPlan(store, {
+    service: "text_model",
+    primaryProfileId: "text-primary",
+    backupProfileIds: ["text-backup"],
+  })
+  const calls = []
+  const result = await runApiProfileFailover(plan, async (attempt) => {
+    calls.push(attempt.profileId)
+    if (!attempt.apiKey) {
+      throw { message: "missing api key" }
+    }
+    return { text: "backup generated script", profileId: attempt.profileId }
+  })
+  const serialized = JSON.stringify(result)
+
+  assert.deepEqual(calls, ["text-primary", "text-backup"])
+  assert.equal(result.ok, true)
+  assert.equal(result.value.profileId, "text-backup")
+  assert.equal(result.state.failedAttempts[0].profileId, "text-primary")
+  assert.equal(serialized.includes("secret-text-backup"), false)
+})

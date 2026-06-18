@@ -64,13 +64,17 @@ import {
 import {
   API_PROFILE_SERVICES,
   buildApiProfileRequestContext,
+  createApiFailoverLogEntry,
+  createApiFailoverPlan,
   createApiProfileLogEntry,
   createDefaultApiProfileStore,
   readApiProfileStore,
   resolveApiProfile,
+  runApiProfileFailover,
   saveApiProfileStore,
   setActiveApiProfile,
   upsertApiProfile,
+  type ApiFailoverAttempt,
   type ApiProfile,
   type ApiProfileService,
   type ApiProfileStore,
@@ -82,7 +86,6 @@ import {
   createExternalMaterialPlaceholderAsset,
   createImportedVideoAsset,
   createPerShotImageGenerationPlan,
-  createVideoAssetLogEntry,
   getExternalMaterialLabels,
   generateStickmanStoryboardAsset,
   normalizeVideoImageGenerationSettings,
@@ -91,6 +94,7 @@ import {
   runStickmanImageGenerationQueue,
   toggleVideoAssetPreviewExpansion,
   type ExternalMaterialLabelId,
+  type VideoImageGenerationRequest,
   type VideoImageGenerationPresetId,
   type VideoImageGenerationSettings,
 } from "@/lib/video-assets"
@@ -101,10 +105,10 @@ import {
   createModelVideoAnalysisDraft,
   createPastedScriptDraft,
   createScriptGenerationFailureDraft,
-  createScriptGenerationLogEntry,
   readScriptWorkflowSettings,
   saveScriptWorkflowSettings,
   shouldRequestTextModelForScriptMode,
+  type ScriptGenerationRequest,
   type ScriptRewriteMode,
   type ScriptWorkflowMode,
   type ScriptWorkflowSettings,
@@ -264,6 +268,133 @@ async function runRecoveryStepFromSnapshot(
   }
 
   return { ok: false, reason: "manual_confirmation_required" }
+}
+
+function createModuleFailoverPlan(
+  store: ApiProfileStore,
+  service: ApiProfileService
+) {
+  const activeProfile = buildApiProfileRequestContext(store, service)
+  const backupProfileIds = store.profiles[service]
+    .map((profile) => profile.id)
+    .filter((profileId) => profileId !== activeProfile.profileId)
+
+  return createApiFailoverPlan(store, {
+    service,
+    primaryProfileId: activeProfile.profileId,
+    backupProfileIds,
+  })
+}
+
+function requestContextFromAttempt(attempt: ApiFailoverAttempt) {
+  return {
+    service: attempt.service,
+    profileId: attempt.profileId,
+    model: attempt.model,
+    apiBaseUrl: attempt.apiBaseUrl,
+    apiKey: attempt.apiKey,
+  }
+}
+
+function formatApiFailoverSummary(
+  label: string,
+  result:
+    | { ok: true; state: { activeProfileId: string; failedAttempts: Array<{ profileId: string }> } }
+    | { ok: false; state: { activeProfileId: string; failedAttempts: Array<{ profileId: string }>; pauseReason: string }; error: string }
+) {
+  const failureCount = result.state.failedAttempts.length
+  const activeProfileId = result.state.activeProfileId || "无可用 Profile"
+  const pauseReason = result.ok ? "" : result.state.pauseReason || result.error
+  return [
+    `${label}：${activeProfileId}`,
+    `失败 ${failureCount}`,
+    pauseReason ? `暂停原因 ${pauseReason}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}
+
+async function requestScriptGenerationText(
+  request: ScriptGenerationRequest
+) {
+  if (!request.apiKey) {
+    throw {
+      message: "文本模型 Profile 尚未配置 API Key，已切换到备份路由。",
+    }
+  }
+
+  const response = await fetch("/api/codex/chat/completions", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  })
+  const payload = (await response.json().catch(() => null)) as {
+    text?: unknown
+    error?: unknown
+  } | null
+
+  if (!response.ok) {
+    throw {
+      status: response.status,
+      message:
+        typeof payload?.error === "string"
+          ? payload.error
+          : `文本模型请求失败：${response.status}`,
+    }
+  }
+
+  const modelText = typeof payload?.text === "string" ? payload.text.trim() : ""
+  if (!modelText) throw { message: "文本模型没有返回脚本内容" }
+  return modelText
+}
+
+async function requestImageGeneration(request: VideoImageGenerationRequest) {
+  if (!request.apiKey) {
+    throw {
+      message: "图片生成 Profile 尚未配置 API Key，已切换到备份路由。",
+    }
+  }
+
+  const response = await fetch(request.endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: request.model,
+      prompt: request.prompt,
+      negative_prompt: request.negativePrompt,
+      apiBaseUrl: request.apiBaseUrl,
+      apiKey: request.apiKey,
+      size: request.size,
+      quality: request.quality,
+      aspectRatio: request.aspectRatio,
+      styleStrength: request.styleStrength,
+      n: 1,
+    }),
+  })
+  const payload = (await response.json().catch(() => null)) as {
+    images?: unknown
+    error?: unknown
+  } | null
+
+  if (!response.ok) {
+    throw {
+      status: response.status,
+      message:
+        typeof payload?.error === "string"
+          ? payload.error
+          : `图片生成失败：${response.status}`,
+    }
+  }
+  if (!Array.isArray(payload?.images)) {
+    throw { message: "接口没有返回图片" }
+  }
+  return payload.images
 }
 
 function inferRequiredMaterialLabel(
@@ -830,66 +961,53 @@ function VideoFactoryShell() {
       applyPastedScript()
       return
     }
-    const request = buildScriptGenerationRequest({
-      profile: buildApiProfileRequestContext(apiProfiles, "text_model"),
-      sourceText: analysisTopic,
-      durationPreset: "45-60s",
-      packageId: "stickman_meme",
-      rewriteMode: effectiveRewriteMode,
-    })
-    const logEntry = createScriptGenerationLogEntry(request)
+    const failoverPlan = createModuleFailoverPlan(apiProfiles, "text_model")
+    const failoverLogEntry = createApiFailoverLogEntry(failoverPlan)
     let draft: VideoAnalysisDraft
+    let failoverSummary = "文本路由：未执行"
 
     setIsGeneratingAnalysis(true)
     try {
-      if (!request.apiKey) {
-        throw new Error("文本模型 Profile 尚未配置 API Key，已切换到手动编辑。")
+      const failoverResult = await runApiProfileFailover(
+        failoverPlan,
+        async (attempt) => {
+          const request = buildScriptGenerationRequest({
+            profile: requestContextFromAttempt(attempt),
+            sourceText: analysisTopic,
+            durationPreset: "45-60s",
+            packageId: "stickman_meme",
+            rewriteMode: effectiveRewriteMode,
+          })
+          return requestScriptGenerationText(request)
+        }
+      )
+      failoverSummary = formatApiFailoverSummary("文本路由", failoverResult)
+
+      if (failoverResult.ok) {
+        draft = createModelVideoAnalysisDraft({
+          sourceText: analysisTopic,
+          modelText: failoverResult.value,
+        })
+      } else {
+        draft = createScriptGenerationFailureDraft({
+          sourceText: analysisTopic,
+          reason: failoverResult.state.pauseReason || failoverResult.error,
+        })
       }
-
-      const response = await fetch("/api/codex/chat/completions", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(request),
-      })
-      const payload = (await response.json().catch(() => null)) as {
-        text?: unknown
-        error?: unknown
-      } | null
-
-      if (!response.ok) {
-        throw new Error(
-          typeof payload?.error === "string"
-            ? payload.error
-            : `文本模型请求失败：${response.status}`
-        )
-      }
-
-      const modelText =
-        typeof payload?.text === "string" ? payload.text.trim() : ""
-      if (!modelText) throw new Error("文本模型没有返回脚本内容")
-
-      draft = createModelVideoAnalysisDraft({
-        sourceText: analysisTopic,
-        modelText,
-      })
-    } catch (error) {
-      draft = createScriptGenerationFailureDraft({
-        sourceText: analysisTopic,
-        reason:
-          error instanceof Error
-            ? error.message
-            : "文本模型请求失败，已切换到手动编辑。",
-      })
     } finally {
       setIsGeneratingAnalysis(false)
     }
 
     applyScriptDraft(
       draft,
-      `脚本分析：${draft.status} · ${effectiveRewriteMode} · ${logEntry.profileId} · ${logEntry.sourceLength} 字符`
+      [
+        `脚本分析：${draft.status}`,
+        effectiveRewriteMode,
+        failoverSummary,
+        `备份 ${failoverLogEntry.attempts.length - 1}`,
+      ]
+        .filter(Boolean)
+        .join(" · ")
     )
     setToast(
       draft.status === "ready_for_edit"
@@ -1090,7 +1208,8 @@ function VideoFactoryShell() {
 
     stopStickmanGenerationRef.current = false
     setIsGeneratingStickmanImages(true)
-    const profile = buildApiProfileRequestContext(apiProfiles, "image_generation")
+    const failoverPlan = createModuleFailoverPlan(apiProfiles, "image_generation")
+    const failoverLogEntry = createApiFailoverLogEntry(failoverPlan)
     let completed = 0
     let failed = 0
 
@@ -1113,53 +1232,29 @@ function VideoFactoryShell() {
           try {
             updateProgress(` · ${shot.id}`)
             setToast(`正在生成火柴人图：${shot.id}`)
-            const result = await generateStickmanStoryboardAsset({
-              taskId: activeTask.id,
-              shot,
-              profile,
-              settings: imageGenerationSettings,
-              onAttempt: (attempt, maxAttempts) =>
-                setStickmanProgress(
-                  `${actionLabel} · 已完成 ${completed}/${stickmanShots.length} · 运行中 · ${shot.id} · 第 ${attempt}/${maxAttempts} 次`
-                ),
-              requestImages: async (request) => {
-                const response = await fetch(request.endpoint, {
-                  method: "POST",
-                  headers: {
-                    Accept: "application/json",
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    model: request.model,
-                    prompt: request.prompt,
-                    negative_prompt: request.negativePrompt,
-                    apiBaseUrl: request.apiBaseUrl,
-                    apiKey: request.apiKey,
-                    size: request.size,
-                    quality: request.quality,
-                    aspectRatio: request.aspectRatio,
-                    styleStrength: request.styleStrength,
-                    n: 1,
-                  }),
+            const failoverResult = await runApiProfileFailover(
+              failoverPlan,
+              async (attempt) =>
+                generateStickmanStoryboardAsset({
+                  taskId: activeTask.id,
+                  shot,
+                  profile: requestContextFromAttempt(attempt),
+                  settings: imageGenerationSettings,
+                  onAttempt: (attemptIndex, maxAttempts) =>
+                    setStickmanProgress(
+                      `${actionLabel} · 已完成 ${completed}/${stickmanShots.length} · 运行中 · ${shot.id} · ${attempt.profileId} · 第 ${attemptIndex}/${maxAttempts} 次`
+                    ),
+                  requestImages: requestImageGeneration,
                 })
-                const payload = (await response.json().catch(() => null)) as {
-                  images?: unknown
-                  error?: unknown
-                } | null
-
-                if (!response.ok) {
-                  throw new Error(
-                    typeof payload?.error === "string"
-                      ? payload.error
-                      : `图片生成失败：${response.status}`
-                  )
-                }
-                if (!Array.isArray(payload?.images)) {
-                  throw new Error("接口没有返回图片")
-                }
-                return payload.images
-              },
-            })
+            )
+            const failoverSummary = formatApiFailoverSummary(
+              "图片路由",
+              failoverResult
+            )
+            if (!failoverResult.ok) {
+              throw new Error(failoverSummary)
+            }
+            const result = failoverResult.value
             const saved = await window.promptCenterDesktop?.saveTaskAssetFile?.({
               taskId: activeTask.id,
               kind: result.asset.kind,
@@ -1196,12 +1291,11 @@ function VideoFactoryShell() {
                   ...result.asset,
                   previewUrl: preview,
                 }
-            const logEntry = createVideoAssetLogEntry(result.request)
             const record: VideoTaskSnapshot["records"][number] = {
               id: `asset_${shot.id}_${Date.now()}`,
               at: new Date().toISOString(),
               kind: "asset_added",
-              message: `火柴人图已生成：${shot.id} · ${logEntry.profileId} · ${result.attempts} 次请求`,
+              message: `火柴人图已生成：${shot.id} · ${failoverSummary} · 备份 ${failoverLogEntry.attempts.length - 1} · ${result.attempts} 次请求`,
             }
             const isSameShotGeneratedImage = (item: VideoAsset) =>
               item.kind === "stickman_image" &&

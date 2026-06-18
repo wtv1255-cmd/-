@@ -103,3 +103,16 @@ test("video factory records recovery strategy for resumable task state", async (
   assert.match(source, /恢复摘要/)
   assert.match(source, /completedStepIds\.length/)
 })
+
+test("video factory wires api profile failover into live text and image calls", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /createApiFailoverPlan/)
+  assert.match(source, /runApiProfileFailover/)
+  assert.match(source, /createApiFailoverLogEntry/)
+  assert.match(source, /createModuleFailoverPlan\(apiProfiles, "text_model"\)/)
+  assert.match(source, /createModuleFailoverPlan\(apiProfiles, "image_generation"\)/)
+  assert.match(source, /failedAttempts/)
+  assert.match(source, /pauseReason/)
+  assert.doesNotMatch(source, /message: .*apiKey/)
+})
