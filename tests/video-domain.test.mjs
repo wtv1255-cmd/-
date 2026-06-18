@@ -209,3 +209,51 @@ test("video task snapshots survive storage roundtrip as metadata only", async ()
   assert.equal(restored.timeline.tracks[0].clips[0].assetId, audio.id)
   assert.equal(/data:audio|base64|Blob|arrayBuffer/i.test(raw), false)
 })
+
+test("video task snapshots persist production recovery metadata", async () => {
+  const {
+    createVideoTaskSnapshot,
+    readVideoTaskSnapshot,
+    saveVideoTaskSnapshot,
+  } = await importVideoDomainModule()
+  const storage = new Map()
+  const browserStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+  }
+  const snapshot = createVideoTaskSnapshot({
+    id: "task_recovery",
+    title: "恢复任务",
+    recovery: {
+      taskId: "task_recovery",
+      taskStatus: "paused",
+      autoResumeStepIds: ["timeline", "draft"],
+      manualStepIds: ["publish"],
+      preservedAssetIds: ["img_01", "voice_audio_voice.wav"],
+      pauseReasons: ["publish:needs_confirmation"],
+      requiresUserConfirmation: true,
+      steps: [
+        {
+          id: "images",
+          state: "success",
+          assetIds: ["img_01"],
+          shouldRegenerate: false,
+        },
+        {
+          id: "publish",
+          state: "needs_manual",
+          assetIds: [],
+          shouldRegenerate: false,
+        },
+      ],
+    },
+  })
+
+  saveVideoTaskSnapshot(snapshot, browserStorage)
+  const restored = readVideoTaskSnapshot("task_recovery", browserStorage)
+
+  assert.equal(restored.recovery.taskStatus, "paused")
+  assert.deepEqual(restored.recovery.autoResumeStepIds, ["timeline", "draft"])
+  assert.equal(restored.recovery.requiresUserConfirmation, true)
+  assert.equal(restored.recovery.steps[0].shouldRegenerate, false)
+})

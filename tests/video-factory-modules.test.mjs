@@ -91,3 +91,12 @@ test("voice module exposes local tts voice presets and manual audio fallback", a
   assert.match(source, /onTaskVoicePresetChange/)
   assert.match(source, /resolveVideoTtsVoiceSelection/)
 })
+
+test("video factory records recovery strategy for resumable task state", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /createRecoveryPlanFromSnapshot/)
+  assert.match(source, /planVideoTaskRecovery/)
+  assert.match(source, /recovery_plan/)
+  assert.match(source, /恢复策略：自动续跑/)
+})

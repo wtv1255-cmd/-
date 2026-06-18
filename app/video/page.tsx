@@ -38,6 +38,8 @@ import {
 import { hasLicenseFeature } from "@/lib/licensing"
 import {
   createVideoTask,
+  createVideoRecoverySnapshot,
+  planVideoTaskRecovery,
   readVideoTasks,
   saveVideoTasks,
   type VideoTask,
@@ -174,6 +176,52 @@ const materialIntentRules: Array<{
   { labelId: "real_drama_clip", patterns: [/漫剧|剧情|真人|片段/i] },
   { labelId: "emotion_boost", patterns: [/情绪|冲突|痛点|震惊|共鸣/i] },
 ]
+
+function createRecoveryPlanFromSnapshot(snapshot: VideoTaskSnapshot) {
+  const imageAssetIds = snapshot.assets
+    .filter((asset) => asset.kind === "stickman_image")
+    .map((asset) => asset.id)
+  const voiceAssetIds = snapshot.voice.audio ? [snapshot.voice.audio.id] : []
+  const subtitleIds = snapshot.voice.subtitles.map((cue) => cue.id)
+  const draftAssetIds = snapshot.assets
+    .filter((asset) => asset.kind === "jianying_draft")
+    .map((asset) => asset.id)
+  const recoverySnapshot = createVideoRecoverySnapshot({
+    taskId: snapshot.id,
+    steps: [
+      {
+        id: "images",
+        state: imageAssetIds.length ? "success" : "waiting",
+        assetIds: imageAssetIds,
+      },
+      {
+        id: "tts",
+        state: voiceAssetIds.length ? "success" : "waiting",
+        assetIds: voiceAssetIds,
+      },
+      {
+        id: "subtitles",
+        state: subtitleIds.length ? "success" : "waiting",
+        assetIds: subtitleIds,
+      },
+      {
+        id: "timeline",
+        state: snapshot.timeline.tracks.length ? "success" : "waiting",
+      },
+      {
+        id: "draft",
+        state: draftAssetIds.length ? "success" : "waiting",
+        assetIds: draftAssetIds,
+      },
+      { id: "publish", state: "waiting" },
+    ],
+  })
+
+  return planVideoTaskRecovery(recoverySnapshot, {
+    hasApiBackup: true,
+    localTtsAvailable: Boolean(snapshot.voice.audio),
+  })
+}
 
 function inferRequiredMaterialLabel(
   shot: Pick<StoryboardShot, "id" | "voiceText" | "visualDescription" | "prompt">
@@ -347,6 +395,7 @@ function VideoFactoryShell() {
         return
       }
       const snapshot = readVideoTaskSnapshot(activeTask.id)
+      const recovery = snapshot ? createRecoveryPlanFromSnapshot(snapshot) : null
       if (snapshot?.source.userTopic) {
         setAnalysisTopic(snapshot.source.userTopic)
       }
@@ -386,6 +435,24 @@ function VideoFactoryShell() {
             }
           : null
       )
+      if (snapshot && recovery) {
+        saveVideoTaskSnapshot({
+          ...snapshot,
+          status: recovery.taskStatus,
+          recovery,
+          records: [
+            ...snapshot.records.filter(
+              (record) => record.kind !== "recovery_plan"
+            ),
+            {
+              id: `recovery_${Date.now()}`,
+              at: new Date().toISOString(),
+              kind: "recovery_plan",
+              message: `恢复策略：自动续跑 ${recovery.autoResumeStepIds.join(",") || "无"}；需人工 ${recovery.manualStepIds.join(",") || "无"}；保留素材 ${recovery.preservedAssetIds.length} 个。`,
+            },
+          ],
+        })
+      }
     })
     return () => {
       alive = false
@@ -491,19 +558,7 @@ function VideoFactoryShell() {
           userTopic: "等待输入关键词、抖音链接或本地视频",
         },
         records: profileRecords,
-        assets: [
-          {
-            id: "render_placeholder",
-            kind: "rendered_video",
-            displayName: "rendered-video-placeholder.mp4",
-            file: createTaskFileRef({
-              taskId: task.id,
-              kind: "rendered_video",
-              filename: "rendered-video-placeholder.mp4",
-              mimeType: "video/mp4",
-            }),
-          },
-        ],
+        assets: [],
         publish: {
           platform: "douyin",
           accountId: defaultPublishAccount.id,

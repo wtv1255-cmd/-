@@ -1,4 +1,8 @@
-import type { VideoTaskStatus, VideoWorkflowStep } from "@/lib/video-task"
+import type {
+  VideoTaskRecoveryPlan,
+  VideoTaskStatus,
+  VideoWorkflowStep,
+} from "@/lib/video-task"
 
 export type VideoSourceMode =
   | "keyword_search"
@@ -153,6 +157,7 @@ export type VideoTaskSnapshot = {
   voice: VoicePlan
   timeline: VideoTimeline
   publish?: PublishTarget
+  recovery: VideoTaskRecoveryPlan
   records: TaskRecord[]
 }
 
@@ -226,6 +231,19 @@ function cleanSegment(value: string, fallback: string) {
 
 function normalizeTitle(value: string) {
   return value.replace(/\s+/g, " ").trim() || "未命名视频任务"
+}
+
+function createEmptyRecoveryPlan(taskId: string): VideoTaskRecoveryPlan {
+  return {
+    taskId,
+    taskStatus: "draft",
+    steps: [],
+    autoResumeStepIds: [],
+    manualStepIds: [],
+    preservedAssetIds: [],
+    pauseReasons: [],
+    requiresUserConfirmation: false,
+  }
 }
 
 export function createTaskFileRef(input: CreateTaskFileRefInput): TaskFileRef {
@@ -317,6 +335,7 @@ export function createVideoTaskSnapshot(
       tracks: [],
     },
     publish: input.publish,
+    recovery: input.recovery || createEmptyRecoveryPlan(input.id),
     records: input.records || [],
   }
 }

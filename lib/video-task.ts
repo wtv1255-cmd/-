@@ -20,6 +20,69 @@ export type VideoWorkflowStep = {
 
 export type VideoTaskStatus = "draft" | "in_progress" | "paused" | "exported"
 
+export type VideoProductionStepState =
+  | "waiting"
+  | "running"
+  | "success"
+  | "failed"
+  | "skipped"
+  | "needs_manual"
+
+export type VideoProductionStepId =
+  | "source"
+  | "script"
+  | "storyboard"
+  | "images"
+  | "tts"
+  | "subtitles"
+  | "timeline"
+  | "draft"
+  | "publish"
+  | "upload"
+  | "delete"
+  | "overwrite"
+  | "manual_edit_replace"
+
+export type VideoProductionStep = {
+  id: VideoProductionStepId
+  state: VideoProductionStepState
+  reason?: string
+  assetIds: string[]
+  shouldRegenerate: boolean
+}
+
+export type VideoRecoverySnapshot = {
+  taskId: string
+  steps: VideoProductionStep[]
+}
+
+export type CreateVideoRecoveryStepInput = Partial<
+  Pick<VideoProductionStep, "state" | "reason" | "assetIds">
+> & {
+  id: VideoProductionStepId
+}
+
+export type CreateVideoRecoverySnapshotInput = {
+  taskId: string
+  steps?: CreateVideoRecoveryStepInput[]
+}
+
+export type PlanVideoTaskRecoveryInput = {
+  hasApiBackup: boolean
+  localTtsAvailable: boolean
+}
+
+export type VideoTaskRecoveryPlan = {
+  taskId: string
+  taskStatus: VideoTaskStatus
+  steps: VideoProductionStep[]
+  autoResumeStepIds: VideoProductionStepId[]
+  manualStepIds: VideoProductionStepId[]
+  preservedAssetIds: string[]
+  pauseReasons: string[]
+  requiresUserConfirmation: boolean
+}
+
 export type VideoTask = {
   id: string
   title: string
@@ -87,6 +150,22 @@ export const VIDEO_WORKFLOW_STEPS: ReadonlyArray<
   },
 ]
 
+const safeAutoResumeSteps = new Set<VideoProductionStepId>([
+  "images",
+  "tts",
+  "subtitles",
+  "timeline",
+  "draft",
+])
+
+const destructiveOrPublishSteps = new Set<VideoProductionStepId>([
+  "publish",
+  "upload",
+  "delete",
+  "overwrite",
+  "manual_edit_replace",
+])
+
 function nowIso(now?: string) {
   return now || new Date().toISOString()
 }
@@ -101,6 +180,106 @@ function createWorkflow(): VideoWorkflowStep[] {
     ...step,
     state: index === 0 ? "active" : "locked",
   }))
+}
+
+function normalizeProductionStep(input: CreateVideoRecoveryStepInput): VideoProductionStep {
+  const state: VideoProductionStepState =
+    input.state === "running" ||
+    input.state === "success" ||
+    input.state === "failed" ||
+    input.state === "skipped" ||
+    input.state === "needs_manual"
+      ? input.state
+      : "waiting"
+
+  return {
+    id: input.id,
+    state,
+    reason: input.reason,
+    assetIds: Array.isArray(input.assetIds)
+      ? input.assetIds.filter(
+          (assetId: unknown): assetId is string => typeof assetId === "string"
+        )
+      : [],
+    shouldRegenerate: false,
+  }
+}
+
+function shouldPauseForUnavailableDependency(
+  step: VideoProductionStep,
+  input: PlanVideoTaskRecoveryInput
+) {
+  if (step.id === "images" && step.state === "failed" && !input.hasApiBackup) {
+    return "images:no_api_backup"
+  }
+  if (step.id === "tts" && step.state === "failed" && !input.localTtsAvailable) {
+    return "tts:local_tts_unavailable"
+  }
+  return ""
+}
+
+function shouldAutoResume(step: VideoProductionStep) {
+  return (
+    safeAutoResumeSteps.has(step.id) &&
+    (step.state === "failed" ||
+      step.state === "waiting" ||
+      step.state === "running")
+  )
+}
+
+export function createVideoRecoverySnapshot({
+  taskId,
+  steps = [],
+}: CreateVideoRecoverySnapshotInput): VideoRecoverySnapshot {
+  return {
+    taskId: taskId || "task",
+    steps: steps.map(normalizeProductionStep),
+  }
+}
+
+export function planVideoTaskRecovery(
+  snapshot: VideoRecoverySnapshot,
+  input: PlanVideoTaskRecoveryInput
+): VideoTaskRecoveryPlan {
+  const pauseReasons: string[] = []
+  const autoResumeStepIds: VideoProductionStepId[] = []
+  const manualStepIds: VideoProductionStepId[] = []
+  const preservedAssetIds: string[] = []
+  const steps = snapshot.steps.map((step) => {
+    const dependencyPause = shouldPauseForUnavailableDependency(step, input)
+    const manual = destructiveOrPublishSteps.has(step.id)
+
+    if (step.state === "success") {
+      preservedAssetIds.push(...step.assetIds)
+    }
+    if (manual) {
+      manualStepIds.push(step.id)
+      return { ...step, state: "needs_manual" as const }
+    }
+    if (dependencyPause) {
+      pauseReasons.push(dependencyPause)
+      return { ...step, state: "failed" as const }
+    }
+    if (shouldAutoResume(step)) {
+      autoResumeStepIds.push(step.id)
+      return { ...step, state: "waiting" as const }
+    }
+
+    return step
+  })
+  const requiresUserConfirmation = manualStepIds.length > 0
+
+  return {
+    taskId: snapshot.taskId,
+    taskStatus:
+      pauseReasons.length || requiresUserConfirmation ? "paused" : "in_progress",
+    steps,
+    autoResumeStepIds,
+    manualStepIds,
+    preservedAssetIds: Array.from(new Set(preservedAssetIds)),
+    pauseReasons,
+    requiresUserConfirmation,
+  }
 }
 
 export function createVideoTask(input: CreateVideoTaskInput = {}): VideoTask {
