@@ -1,6 +1,8 @@
 export type ApiProfileService =
   | "text_model"
   | "image_generation"
+  | "cloud_tts"
+  | "edit_director"
   | "video_parsing"
   | "publish_helper"
 
@@ -117,6 +119,8 @@ export const API_PROFILES_STORAGE_KEY = "ta-huo:api-profiles:v1"
 export const API_PROFILE_SERVICES = [
   "text_model",
   "image_generation",
+  "cloud_tts",
+  "edit_director",
   "video_parsing",
   "publish_helper",
 ] as const satisfies ReadonlyArray<ApiProfileService>
@@ -124,6 +128,8 @@ export const API_PROFILE_SERVICES = [
 const DEFAULT_API_BASE_BY_SERVICE: Record<ApiProfileService, string> = {
   text_model: "https://ai.hybgzs.com/v1",
   image_generation: "https://www.521xxz.com",
+  cloud_tts: "https://api.example.com/tts/v1",
+  edit_director: "https://api.example.com/edit-director/v1",
   video_parsing: "https://api.example.com/video/v1",
   publish_helper: "https://api.example.com/publish/v1",
 }
@@ -131,6 +137,8 @@ const DEFAULT_API_BASE_BY_SERVICE: Record<ApiProfileService, string> = {
 const SERVICE_LABEL_BY_SERVICE: Record<ApiProfileService, string> = {
   text_model: "语言模型",
   image_generation: "图片生成",
+  cloud_tts: "云端 TTS",
+  edit_director: "剪辑决策",
   video_parsing: "视频解析",
   publish_helper: "发布辅助",
 }
@@ -138,6 +146,8 @@ const SERVICE_LABEL_BY_SERVICE: Record<ApiProfileService, string> = {
 const DEFAULT_MODEL_BY_SERVICE: Record<ApiProfileService, string> = {
   text_model: "claude-opus-4-6-thinking",
   image_generation: "gpt-image-2-2K",
+  cloud_tts: "tts-default",
+  edit_director: "edit-director-default",
   video_parsing: "video_parsing-default",
   publish_helper: "publish_helper-default",
 }
@@ -146,6 +156,8 @@ function emptyProfiles(): Record<ApiProfileService, ApiProfile[]> {
   return {
     text_model: [],
     image_generation: [],
+    cloud_tts: [],
+    edit_director: [],
     video_parsing: [],
     publish_helper: [],
   }
@@ -155,6 +167,8 @@ function emptyActiveProfiles(): Record<ApiProfileService, string> {
   return {
     text_model: "",
     image_generation: "",
+    cloud_tts: "",
+    edit_director: "",
     video_parsing: "",
     publish_helper: "",
   }

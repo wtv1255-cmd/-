@@ -200,6 +200,115 @@ test("per-shot generation plan skips successful shots unless regenerate is expli
   assert.deepEqual(toggleVideoAssetPreviewExpansion(["asset_03"], "asset_03"), [])
 })
 
+test("per-shot generation plan can regenerate every stickman shot", async () => {
+  const { createPerShotImageGenerationPlan } = await importVideoAssetsModule()
+  const shots = [
+    { id: "shot_01", status: "ready", assetIds: ["asset_01"] },
+    { id: "shot_02", status: "needs_asset", assetIds: [] },
+    { id: "shot_03", status: "ready", assetIds: ["asset_03"] },
+  ]
+
+  const regenerateAllPlan = createPerShotImageGenerationPlan({
+    shots,
+    action: "regenerate_all",
+  })
+
+  assert.deepEqual(
+    regenerateAllPlan.targets.map((shot) => shot.id),
+    ["shot_01", "shot_02", "shot_03"]
+  )
+  assert.equal(regenerateAllPlan.preserveSuccessfulAssets, false)
+})
+
+test("regeneration batch clears old generated images and marks targets missing first", async () => {
+  const { prepareStickmanRegenerationBatch } = await importVideoAssetsModule()
+  const shot01Asset = {
+    id: "old_asset_01",
+    kind: "stickman_image",
+    displayName: "old-01.png",
+    file: { path: "old-01.png" },
+    tags: ["shot_01", "generated_image"],
+  }
+  const shot02Asset = {
+    id: "old_asset_02",
+    kind: "stickman_image",
+    displayName: "old-02.png",
+    file: { path: "old-02.png" },
+    tags: ["shot_02", "generated_image"],
+  }
+  const externalAsset = {
+    id: "manual_cover",
+    kind: "cover_image",
+    displayName: "cover.png",
+    file: { path: "cover.png" },
+    tags: ["shot_01"],
+  }
+
+  const prepared = prepareStickmanRegenerationBatch({
+    shots: [
+      { id: "shot_01", status: "ready", assetIds: ["old_asset_01"] },
+      { id: "shot_02", status: "ready", assetIds: ["old_asset_02"] },
+      { id: "shot_03", status: "ready", assetIds: ["manual_asset"] },
+    ],
+    assets: [shot01Asset, shot02Asset, externalAsset],
+    targetShotIds: ["shot_01", "shot_03"],
+  })
+
+  assert.deepEqual(
+    prepared.assets.map((asset) => asset.id),
+    ["old_asset_02", "manual_cover"]
+  )
+  assert.deepEqual(
+    prepared.shots.map((shot) => [shot.id, shot.status, shot.assetIds]),
+    [
+      ["shot_01", "needs_asset", []],
+      ["shot_02", "ready", ["old_asset_02"]],
+      ["shot_03", "needs_asset", []],
+    ]
+  )
+  assert.deepEqual(prepared.removedAssetIds, ["old_asset_01"])
+})
+
+test("removing a generated stickman asset marks its shot missing again", async () => {
+  const { removeVideoAssetFromInventory } = await importVideoAssetsModule()
+  const generatedAsset = {
+    id: "asset_01",
+    kind: "stickman_image",
+    displayName: "shot-01.png",
+    file: { path: "shot-01.png" },
+    tags: ["shot_01", "generated_image"],
+  }
+  const manualAsset = {
+    id: "asset_manual",
+    kind: "cover_image",
+    displayName: "cover.png",
+    file: { path: "cover.png" },
+    tags: ["shot_01"],
+  }
+
+  const removal = removeVideoAssetFromInventory({
+    shots: [
+      { id: "shot_01", status: "ready", assetIds: ["asset_01", "asset_manual"] },
+      { id: "shot_02", status: "ready", assetIds: ["asset_02"] },
+    ],
+    assets: [generatedAsset, manualAsset],
+    assetId: "asset_01",
+  })
+
+  assert.deepEqual(
+    removal.assets.map((asset) => asset.id),
+    ["asset_manual"]
+  )
+  assert.deepEqual(removal.affectedShotIds, ["shot_01"])
+  assert.deepEqual(
+    removal.shots.map((shot) => [shot.id, shot.status, shot.assetIds]),
+    [
+      ["shot_01", "needs_asset", ["asset_manual"]],
+      ["shot_02", "ready", ["asset_02"]],
+    ]
+  )
+})
+
 test("manual external material labels stay explicit and placeholders are task scoped", async () => {
   const {
     EXTERNAL_MATERIAL_LABEL_OPTIONS,

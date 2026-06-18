@@ -4,6 +4,7 @@ import {
   forwardCodexImageJson,
   isAgnesImageModel,
   readImageCount,
+  resolveImageGenerationPath,
   resolveRequestBaseUrl,
   resolveRequestApiKey,
 } from "@/lib/server/codex-proxy"
@@ -46,6 +47,21 @@ export async function POST(request: Request) {
   }
 
   const imageDataUrls = await Promise.all(images.map(fileToDataUrl))
+  if (resolveImageGenerationPath({ apiBaseUrl, model }) === "/v1/images/generations") {
+    return forwardCodexImageJson(
+      "/v1/images/generations",
+      buildAgnesImagePayload({
+        model,
+        prompt,
+        size: input.get("size"),
+        images: imageDataUrls,
+      }),
+      apiBaseUrl,
+      apiKey,
+      count
+    )
+  }
+
   return forwardCodexImageJson(
     "/v1/videos",
     build521ImagePayload({

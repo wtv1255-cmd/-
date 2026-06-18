@@ -1,7 +1,7 @@
 import {
   buildImageJsonPayload,
   forwardCodexImageJson,
-  isAgnesImageModel,
+  resolveImageGenerationPath,
 } from "@/lib/server/codex-proxy"
 
 export const runtime = "nodejs"
@@ -16,9 +16,10 @@ export async function POST(request: Request) {
   }
 
   return forwardCodexImageJson(
-    isAgnesImageModel(String(input.model || ""))
-      ? "/v1/images/generations"
-      : "/v1/videos",
+    resolveImageGenerationPath({
+      apiBaseUrl: result.apiBaseUrl,
+      model: String(input.model || ""),
+    }),
     result.payload,
     result.apiBaseUrl,
     result.apiKey,

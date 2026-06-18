@@ -1,4 +1,4 @@
-export type VideoTtsEngine = "local_indextts2" | "manual_audio"
+export type VideoTtsEngine = "local_indextts2" | "cloud_tts" | "manual_audio"
 
 export type VideoTtsVoicePresetId =
   | "recommended_female"
@@ -22,6 +22,9 @@ export type VideoTtsSettings = {
   launchArgs: string[]
   defaultVoicePresetId: VideoTtsVoicePresetId
   taskVoicePresetId?: VideoTtsVoicePresetId
+  referenceAudioPath: string
+  manualAudioPath: string
+  cloudProfileId: string
   embedModelInPackage: false
 }
 
@@ -34,6 +37,9 @@ export type VideoTtsLaunchPlan = {
   command: string
   args: string[]
   manualCommand: string
+  referenceAudioPath: string
+  manualAudioPath: string
+  cloudProfileId: string
 }
 
 export type ResolveVideoTtsVoiceSelectionInput = {
@@ -94,6 +100,11 @@ function normalizeLocalPath(value: unknown, fallback = DEFAULT_LOCAL_INDEXTTS2_P
   return raw || fallback
 }
 
+function normalizeAudioPath(value: unknown) {
+  const raw = cleanText(value).replace(/\//g, "\\").replace(/\\+$/u, "")
+  return raw
+}
+
 function normalizeLaunchArgs(value: unknown) {
   return Array.isArray(value)
     ? value
@@ -103,7 +114,11 @@ function normalizeLaunchArgs(value: unknown) {
 }
 
 function isVideoTtsEngine(value: unknown): value is VideoTtsEngine {
-  return value === "local_indextts2" || value === "manual_audio"
+  return (
+    value === "local_indextts2" ||
+    value === "cloud_tts" ||
+    value === "manual_audio"
+  )
 }
 
 function isVideoTtsVoicePresetId(value: unknown): value is VideoTtsVoicePresetId {
@@ -135,6 +150,9 @@ export function normalizeVideoTtsSettings(value: unknown): VideoTtsSettings {
     taskVoicePresetId: isVideoTtsVoicePresetId(raw.taskVoicePresetId)
       ? raw.taskVoicePresetId
       : undefined,
+    referenceAudioPath: normalizeAudioPath(raw.referenceAudioPath),
+    manualAudioPath: normalizeAudioPath(raw.manualAudioPath),
+    cloudProfileId: cleanText(raw.cloudProfileId),
     embedModelInPackage: false,
   }
 }
@@ -157,6 +175,9 @@ export function createVideoTtsLaunchPlan(
       `cd /d "${normalized.projectPath}"`,
       [normalized.launchCommand, ...args].join(" "),
     ].join(" && "),
+    referenceAudioPath: normalized.referenceAudioPath,
+    manualAudioPath: normalized.manualAudioPath,
+    cloudProfileId: normalized.cloudProfileId,
   }
 }
 

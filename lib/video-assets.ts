@@ -131,7 +131,10 @@ export type RunStickmanImageGenerationQueueInput<T> = {
   shouldStop?: () => boolean
 }
 
-export type PerShotImageGenerationAction = "fill_failed" | "regenerate"
+export type PerShotImageGenerationAction =
+  | "fill_failed"
+  | "regenerate"
+  | "regenerate_all"
 
 export type CreatePerShotImageGenerationPlanInput = {
   shots: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
@@ -143,6 +146,31 @@ export type PerShotImageGenerationPlan = {
   action: PerShotImageGenerationAction
   targets: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
   preserveSuccessfulAssets: boolean
+}
+
+export type PrepareStickmanRegenerationBatchInput = {
+  shots: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
+  assets: VideoAsset[]
+  targetShotIds: string[]
+}
+
+export type StickmanRegenerationBatch = {
+  shots: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
+  assets: VideoAsset[]
+  removedAssetIds: string[]
+}
+
+export type RemoveVideoAssetFromInventoryInput = {
+  shots: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
+  assets: VideoAsset[]
+  assetId: string
+}
+
+export type VideoAssetInventoryRemoval = {
+  shots: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
+  assets: VideoAsset[]
+  removedAsset?: VideoAsset
+  affectedShotIds: string[]
 }
 
 export type StickmanImageGenerationQueueResult<T> = {
@@ -511,13 +539,99 @@ export function removeVideoAssetById(assets: VideoAsset[], assetId: string) {
   return assets.filter((asset) => asset.id !== assetId)
 }
 
+function isGeneratedStickmanAssetForShot(
+  asset: Pick<VideoAsset, "kind" | "tags">,
+  shotId: string
+) {
+  return (
+    asset.kind === "stickman_image" &&
+    Boolean(asset.tags?.includes("generated_image")) &&
+    Boolean(asset.tags?.includes(shotId))
+  )
+}
+
+export function prepareStickmanRegenerationBatch({
+  shots,
+  assets,
+  targetShotIds,
+}: PrepareStickmanRegenerationBatchInput): StickmanRegenerationBatch {
+  const targetIds = new Set(targetShotIds)
+  const removedAssetIds: string[] = []
+  const nextAssets = assets.filter((asset) => {
+    const remove = Array.from(targetIds).some((shotId) =>
+      isGeneratedStickmanAssetForShot(asset, shotId)
+    )
+    if (remove) removedAssetIds.push(asset.id)
+    return !remove
+  })
+
+  return {
+    shots: shots.map((shot) =>
+      targetIds.has(shot.id)
+        ? {
+            ...shot,
+            status: "needs_asset" as const,
+            assetIds: [],
+          }
+        : shot
+    ),
+    assets: nextAssets,
+    removedAssetIds,
+  }
+}
+
+export function removeVideoAssetFromInventory({
+  shots,
+  assets,
+  assetId,
+}: RemoveVideoAssetFromInventoryInput): VideoAssetInventoryRemoval {
+  const removedAsset = assets.find((asset) => asset.id === assetId)
+  const nextAssets = removeVideoAssetById(assets, assetId)
+  const affectedShotIds: string[] = []
+
+  if (!removedAsset) {
+    return {
+      shots,
+      assets: nextAssets,
+      affectedShotIds,
+    }
+  }
+
+  return {
+    shots: shots.map((shot) => {
+      const hadAssetId = shot.assetIds.includes(assetId)
+      const removedGeneratedStickman = isGeneratedStickmanAssetForShot(
+        removedAsset,
+        shot.id
+      )
+      if (!hadAssetId && !removedGeneratedStickman) return shot
+
+      affectedShotIds.push(shot.id)
+      const nextAssetIds = shot.assetIds.filter((id) => id !== assetId)
+      return {
+        ...shot,
+        assetIds: nextAssetIds,
+        status:
+          removedGeneratedStickman || nextAssetIds.length === 0
+            ? "needs_asset"
+            : shot.status,
+      }
+    }),
+    assets: nextAssets,
+    removedAsset,
+    affectedShotIds,
+  }
+}
+
 export function createPerShotImageGenerationPlan({
   shots,
   action,
   shotId,
 }: CreatePerShotImageGenerationPlanInput): PerShotImageGenerationPlan {
   const targets =
-    action === "regenerate"
+    action === "regenerate_all"
+      ? shots
+      : action === "regenerate"
       ? shots.filter((shot) => shot.id === shotId)
       : shots.filter(
           (shot) => shot.status === "needs_asset" || shot.assetIds.length === 0
@@ -526,7 +640,7 @@ export function createPerShotImageGenerationPlan({
   return {
     action,
     targets,
-    preserveSuccessfulAssets: true,
+    preserveSuccessfulAssets: action !== "regenerate_all",
   }
 }
 

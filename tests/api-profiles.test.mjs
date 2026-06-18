@@ -32,7 +32,7 @@ async function importApiProfilesModule() {
   return import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
 }
 
-test("api profile store supports text image video and publish service groups", async () => {
+test("api profile store supports text image cloud tts edit director video and publish service groups", async () => {
   const {
     API_PROFILE_SERVICES,
     createDefaultApiProfileStore,
@@ -52,10 +52,22 @@ test("api profile store supports text image video and publish service groups", a
   assert.deepEqual(API_PROFILE_SERVICES, [
     "text_model",
     "image_generation",
+    "cloud_tts",
+    "edit_director",
     "video_parsing",
     "publish_helper",
   ])
   assert.equal(store.activeProfileByService.text_model, "text-main")
+  assert.equal(resolveApiProfile(store, "cloud_tts").model, "tts-default")
+  assert.equal(resolveApiProfile(store, "edit_director").model, "edit-director-default")
+  assert.equal(
+    resolveApiProfile(store, "edit_director").apiBaseUrl,
+    "https://api.example.com/edit-director/v1"
+  )
+  assert.equal(
+    resolveApiProfile(store, "cloud_tts").apiBaseUrl,
+    "https://api.example.com/tts/v1"
+  )
   assert.equal(resolveApiProfile(store, "text_model").apiBaseUrl, "https://text.example.com/v1")
   assert.equal(resolveApiProfile(store, "text_model").model, "claude-opus-4-6-thinking")
   assert.equal(resolveApiProfile(store, "text_model").apiKey, "fixture-text-secret")

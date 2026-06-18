@@ -15,6 +15,12 @@ declare global {
         missing?: string[]
         error?: string
       }>
+      selectAudioFile?: () => Promise<{
+        canceled?: boolean
+        filePath?: string
+        filename?: string
+        error?: string
+      }>
       saveFileToDownloads?: (input: {
         filename: string
         mimeType?: string

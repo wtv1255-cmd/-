@@ -78,6 +78,44 @@ export function isAgnesImageModel(model: string) {
   return model.toLowerCase() === AGNES_IMAGE_MODEL
 }
 
+function is521ImageBaseUrl(apiBaseUrl: string) {
+  try {
+    const hostname = new URL(apiBaseUrl).hostname.toLowerCase()
+    return hostname === "521xxz.com" || hostname.endsWith(".521xxz.com")
+  } catch {
+    return apiBaseUrl.toLowerCase().includes("521xxz.com")
+  }
+}
+
+export function shouldUseOpenAiImageEndpoint({
+  apiBaseUrl,
+  model,
+}: {
+  apiBaseUrl?: string
+  model?: string
+}) {
+  const cleanBaseUrl = normalizeBaseUrl(apiBaseUrl)
+  const cleanModel = String(model || "").trim().toLowerCase()
+  if (isAgnesImageModel(cleanModel)) return true
+  if (/^(dall-e-|gpt-image-(?!2(?:-|$)))/i.test(cleanModel)) return true
+  return cleanBaseUrl.endsWith("/v1") && !is521ImageBaseUrl(cleanBaseUrl)
+}
+
+export function resolveImageGenerationPath(input: {
+  apiBaseUrl?: string
+  model?: string
+}) {
+  return shouldUseOpenAiImageEndpoint(input)
+    ? "/v1/images/generations"
+    : "/v1/videos"
+}
+
+function resolveOpenAiImageModel(model: string) {
+  const cleanModel = model.trim()
+  if (/^gpt-image-2-(1|2|4)k$/i.test(cleanModel)) return "gpt-image-2"
+  return cleanModel || "gpt-image-1"
+}
+
 export function buildAgnesImagePayload({
   model,
   prompt,
@@ -103,6 +141,21 @@ export function buildAgnesImagePayload({
   return payload
 }
 
+export function buildOpenAiImagePayload(input: ImagePayload) {
+  const payload: Record<string, unknown> = {
+    model: resolveOpenAiImageModel(input.model || ""),
+    prompt: input.prompt?.trim() || "",
+  }
+
+  const count = readImageCount(input.n)
+  if (count > 1) payload.n = count
+  if (keepParam(input.size)) payload.size = input.size
+  if (keepParam(input.quality)) payload.quality = input.quality
+  if (keepParam(input.output_format)) payload.output_format = input.output_format
+  if (keepParam(input.background)) payload.background = input.background
+  return payload
+}
+
 export function buildImageJsonPayload(input: ImagePayload) {
   const model = input.model?.trim() || "gpt-image-2"
   const prompt = input.prompt?.trim() || ""
@@ -119,6 +172,15 @@ export function buildImageJsonPayload(input: ImagePayload) {
         prompt,
         size: input.size,
       }),
+      count,
+      apiKey: readApiKey(input.apiKey),
+      apiBaseUrl: normalizeBaseUrl(input.apiBaseUrl),
+    }
+  }
+
+  if (shouldUseOpenAiImageEndpoint({ apiBaseUrl: input.apiBaseUrl, model })) {
+    return {
+      payload: buildOpenAiImagePayload({ ...input, model, prompt }),
       count,
       apiKey: readApiKey(input.apiKey),
       apiBaseUrl: normalizeBaseUrl(input.apiBaseUrl),

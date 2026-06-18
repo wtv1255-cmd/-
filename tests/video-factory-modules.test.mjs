@@ -87,11 +87,20 @@ test("asset module exposes preset parameters per-shot actions and preview expans
   assert.match(source, /preset\.id/)
   assert.match(source, /preset\.label/)
   assert.match(source, /显示高级参数/)
-  assert.match(source, /补图/)
+  assert.match(source, /补齐缺失/)
+  assert.match(source, /全部重新生成/)
   assert.match(source, /重新生成/)
   assert.match(source, /onRegenerateShot/)
-  assert.match(source, /expandedAssetIds/)
-  assert.match(source, /toggleVideoAssetPreviewExpansion/)
+  assert.match(source, /onRegenerateAllStickman/)
+  assert.match(source, /prepareStickmanRegenerationBatch/)
+  assert.match(source, /clearExistingTargets/)
+  assert.match(source, /stickmanGenerationQueueRef/)
+  assert.match(source, /enqueueStickmanGeneration/)
+  assert.match(source, /removeVideoAssetFromInventory/)
+  assert.match(source, /缺图/)
+  assert.match(source, /previewAsset/)
+  assert.match(source, /fixed inset-0/)
+  assert.match(source, /max-h-\[calc\(100svh-5rem\)\]/)
 })
 
 test("asset module exposes manual external material labels and timeline placeholders", async () => {
@@ -122,13 +131,68 @@ test("asset module exposes optional product icon brand sticker labels", async ()
   assert.match(assetSource, /剪映图标/)
 })
 
+test("storyboard module can delete a shot and keeps prompt edits feeding asset regeneration", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /onDeleteShot/)
+  assert.match(source, /deleteStoryboardShot/)
+  assert.match(source, /deleteStoryboardShotAndReindex/)
+  assert.match(source, /删除/)
+  assert.match(source, /storyboard_shot_deleted/)
+  assert.match(source, /generateStickmanStoryboardAsset\({[\s\S]*shot,/)
+  assert.match(source, /onUpdateShot\(shot\.id, \{ prompt: event\.target\.value \}\)/)
+})
+
+test("asset module keeps generated stickman images in shot rows, not duplicate inventory rows", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /visibleInventoryAssets/)
+  assert.match(source, /isGeneratedStickmanInventoryAsset/)
+  assert.match(source, /const shotAssetLabels = shotAsset/)
+  assert.match(source, /onAssetLabelsChange\(\s*shotAsset\.id/)
+  assert.match(source, /onRemoveAsset\(shotAsset\.id\)/)
+  assert.match(source, /外部素材库存/)
+  assert.match(source, /自动生成的火柴人图已合并到上方分镜行/)
+})
+
+test("asset module can export generated images directly to a Jianying draft", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /导出图片到剪映草稿/)
+  assert.match(source, /exportImageAssetsToJianyingDraft/)
+  assert.match(source, /createImageAssetsDraftTimeline/)
+  assert.match(source, /onExportImagesToDraft/)
+  assert.match(source, /generatedStickmanShotCount === 0/)
+  assert.match(source, /kind: "asset_images_jianying_draft"/)
+  assert.match(source, /promptCenterDesktop\?\.createJianyingDraft/)
+})
+
+test("single-shot regenerate remains queueable while image generation is running", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /const regenerateStickmanShot = \(shotId: string\) =>/)
+  assert.match(source, /enqueueStickmanGeneration/)
+  assert.match(source, /pendingShotIds/)
+  assert.doesNotMatch(source, /disabled=\{generatingStickman\}\s+onClick=\{\(\) => onRegenerateShot\(shot\.id\)\}/)
+  assert.match(source, /\{generatingStickman && !queued \? "加入队列" : "重新生成"\}/)
+})
+
 test("voice module exposes local tts voice presets and manual audio fallback", async () => {
   const source = await readVideoPage()
 
   assert.match(source, /COMMON_VIDEO_TTS_VOICE_PRESETS/)
+  assert.match(source, /云端 TTS/)
+  assert.match(source, /cloud_tts/)
   assert.match(source, /全局默认音色/)
   assert.match(source, /任务临时音色/)
+  assert.match(source, /参考音频/)
+  assert.match(source, /音色样本/)
+  assert.match(source, /选择音频/)
   assert.match(source, /手动音频/)
+  assert.match(source, /manualAudioPath/)
+  assert.match(source, /referenceAudioPath/)
+  assert.match(source, /selectAudioFile/)
+  assert.match(source, /apiProfileServiceLabels\.cloud_tts/)
   assert.match(source, /onTaskVoicePresetChange/)
   assert.match(source, /resolveVideoTtsVoiceSelection/)
 })
@@ -153,6 +217,9 @@ test("video factory wires api profile failover into live text and image calls", 
   assert.match(source, /createApiFailoverLogEntry/)
   assert.match(source, /createModuleFailoverPlan\(apiProfiles, "text_model"\)/)
   assert.match(source, /createModuleFailoverPlan\(apiProfiles, "image_generation"\)/)
+  assert.match(source, /createModuleFailoverPlan\(apiProfiles, "edit_director"\)/)
+  assert.match(source, /requestAiDirectorGeneration/)
+  assert.match(source, /createModelAiDirectorPlan/)
   assert.match(source, /failedAttempts/)
   assert.match(source, /pauseReason/)
   assert.doesNotMatch(source, /message: .*apiKey/)
@@ -161,7 +228,18 @@ test("video factory wires api profile failover into live text and image calls", 
 test("video factory scopes api profile runtime failover claims to wired modules", async () => {
   const source = await readVideoPage()
 
-  assert.match(source, /文本和图片生成已接入运行时主备切换/)
-  assert.match(source, /视频解析和发布辅助目前是配置预留/)
+  assert.match(source, /文本、图片和剪辑决策已接入运行时主备切换/)
+  assert.match(source, /云端 TTS、视频解析和发布辅助目前是配置预留/)
   assert.doesNotMatch(source, /文本、图片、视频解析和发布辅助分别选择本机保存的用户 API。Key/)
+})
+
+test("edit draft module exposes AI director controls and keeps editable draft as primary output", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /生成 AI 剪辑决策/)
+  assert.match(source, /aiDirectorStatus/)
+  assert.match(source, /onGenerateAiDirectorPlan/)
+  assert.match(source, /AI 剪辑决策/)
+  assert.match(source, /createJianyingDraftPlan\({[\s\S]*aiDirectorPlan/)
+  assert.match(source, /剪映可编辑草稿/)
 })

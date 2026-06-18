@@ -62,13 +62,48 @@ test("video tts settings normalize custom paths without enabling model bundling"
     projectPath: " D:/Index-TTS2_ZZDH/ ",
     launchCommand: " webui.py ",
     launchArgs: ["--port", "7861"],
+    referenceAudioPath: " D:/voices/friend.wav ",
+    manualAudioPath: " D:/voice/manual.mp3 ",
     embedModelInPackage: true,
   })
 
   assert.equal(settings.projectPath, "D:\\Index-TTS2_ZZDH")
   assert.equal(settings.launchCommand, "webui.py")
   assert.deepEqual(settings.launchArgs, ["--port", "7861"])
+  assert.equal(settings.referenceAudioPath, "D:\\voices\\friend.wav")
+  assert.equal(settings.manualAudioPath, "D:\\voice\\manual.mp3")
   assert.equal(settings.embedModelInPackage, false)
+})
+
+test("cloud tts settings normalize profile id and avoid bundling reference audio", async () => {
+  const {
+    createVideoTtsLaunchPlan,
+    normalizeVideoTtsSettings,
+    sanitizeVideoTtsSettingsForExport,
+  } = await importVideoTtsModule()
+  const settings = normalizeVideoTtsSettings({
+    engine: "cloud_tts",
+    cloudProfileId: " cloud-main ",
+    referenceAudioPath: " C:/Users/Administrator/Desktop/音色 样本.wav ",
+    manualAudioPath: " ",
+    embedModelInPackage: true,
+  })
+  const launchPlan = createVideoTtsLaunchPlan(settings)
+  const safe = sanitizeVideoTtsSettingsForExport(settings)
+  const serialized = JSON.stringify(safe)
+
+  assert.equal(settings.engine, "cloud_tts")
+  assert.equal(settings.cloudProfileId, "cloud-main")
+  assert.equal(
+    settings.referenceAudioPath,
+    "C:\\Users\\Administrator\\Desktop\\音色 样本.wav"
+  )
+  assert.equal(settings.manualAudioPath, "")
+  assert.equal(launchPlan.cloudProfileId, "cloud-main")
+  assert.equal(launchPlan.referenceAudioPath.endsWith("音色 样本.wav"), true)
+  assert.equal(serialized.includes("data:audio"), false)
+  assert.equal(serialized.includes("base64"), false)
+  assert.equal(safe.embedModelInPackage, false)
 })
 
 test("voice presets allow global defaults and task-level overrides without bundling voices", async () => {

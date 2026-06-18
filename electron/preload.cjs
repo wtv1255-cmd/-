@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   checkLocalTtsProject(input) {
     return ipcRenderer.invoke("ta-huo:check-local-tts-project", input)
   },
+  selectAudioFile() {
+    return ipcRenderer.invoke("ta-huo:select-audio-file")
+  },
   saveFileToDownloads(input) {
     return ipcRenderer.invoke("ta-huo:save-file-to-downloads", input)
   },

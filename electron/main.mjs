@@ -79,6 +79,32 @@ ipcMain.handle(
   createLocalTtsProjectIpcHandler()
 )
 
+ipcMain.handle("ta-huo:select-audio-file", async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "选择音频",
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "音频文件",
+          extensions: ["wav", "mp3", "m4a", "flac", "aac", "ogg"],
+        },
+      ],
+    })
+    const filePath = result.filePaths[0] || ""
+    return {
+      canceled: result.canceled || !filePath,
+      filePath,
+      filename: filePath ? path.basename(filePath) : "",
+    }
+  } catch (error) {
+    return {
+      canceled: false,
+      error: error instanceof Error ? error.message : "选择音频失败",
+    }
+  }
+})
+
 function readDownloadDirectory() {
   try {
     const downloadSettingsPath = getDownloadSettingsPath()
