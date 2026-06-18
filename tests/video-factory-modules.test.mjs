@@ -53,3 +53,18 @@ test("script module exposes workflow modes passthrough and advanced rewrite chan
   assert.match(source, /onUsePastedScript/)
   assert.match(source, /onSaveWorkflowSettings/)
 })
+
+test("asset module exposes preset parameters per-shot actions and preview expansion", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /IMAGE_GENERATION_PRESETS/)
+  assert.match(source, /IMAGE_GENERATION_PRESETS\.map/)
+  assert.match(source, /preset\.id/)
+  assert.match(source, /preset\.label/)
+  assert.match(source, /显示高级参数/)
+  assert.match(source, /补图/)
+  assert.match(source, /重新生成/)
+  assert.match(source, /onRegenerateShot/)
+  assert.match(source, /expandedAssetIds/)
+  assert.match(source, /toggleVideoAssetPreviewExpansion/)
+})

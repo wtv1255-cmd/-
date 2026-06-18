@@ -22,10 +22,38 @@ export type CreateImportedVideoAssetInput = {
   tags?: string[]
 }
 
+export type VideoImageGenerationPresetId =
+  | "vertical_9_16"
+  | "square_1_1"
+  | "landscape_16_9"
+
+export type VideoImageGenerationPreset = {
+  id: VideoImageGenerationPresetId
+  label: string
+  aspectRatio: "9:16" | "1:1" | "16:9"
+  size: string
+  quality: "auto" | "high" | "medium" | "low"
+}
+
+export type VideoImageGenerationSettings = {
+  presetId: VideoImageGenerationPresetId
+  aspectRatio: VideoImageGenerationPreset["aspectRatio"]
+  size: string
+  quality: VideoImageGenerationPreset["quality"]
+  styleStrength: number
+}
+
+export type NormalizeVideoImageGenerationSettingsInput = Partial<
+  Pick<VideoImageGenerationSettings, "presetId" | "styleStrength">
+> & {
+  advanced?: Partial<Pick<VideoImageGenerationSettings, "size" | "quality" | "styleStrength">>
+}
+
 export type BuildVideoImageGenerationRequestInput = {
   profile: ApiProfileRequestContext
   prompt: string
   negativePrompt: string
+  settings?: VideoImageGenerationSettings
   model?: string
 }
 
@@ -37,6 +65,10 @@ export type VideoImageGenerationRequest = {
   apiBaseUrl: string
   apiKey: string
   profileId: string
+  aspectRatio: VideoImageGenerationSettings["aspectRatio"]
+  size: string
+  quality: VideoImageGenerationSettings["quality"]
+  styleStrength: number
 }
 
 export type VideoAssetLogEntry = {
@@ -52,6 +84,7 @@ export type GenerateStickmanStoryboardAssetInput = {
   taskId: string
   shot: StoryboardShot
   profile: ApiProfileRequestContext
+  settings?: VideoImageGenerationSettings
   requestImages: (
     request: VideoImageGenerationRequest
   ) => Promise<CodexImageResult[]>
@@ -74,6 +107,20 @@ export type RunStickmanImageGenerationQueueInput<T> = {
   shouldStop?: () => boolean
 }
 
+export type PerShotImageGenerationAction = "fill_failed" | "regenerate"
+
+export type CreatePerShotImageGenerationPlanInput = {
+  shots: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
+  action: PerShotImageGenerationAction
+  shotId?: string
+}
+
+export type PerShotImageGenerationPlan = {
+  action: PerShotImageGenerationAction
+  targets: Array<Pick<StoryboardShot, "id" | "status" | "assetIds">>
+  preserveSuccessfulAssets: boolean
+}
+
 export type StickmanImageGenerationQueueResult<T> = {
   completed: number
   failed: number
@@ -87,6 +134,30 @@ export type StickmanImageGenerationQueueResult<T> = {
 }
 
 const VIDEO_TASK_FILE_ROOT = "%APPDATA%/她火/tasks"
+
+export const IMAGE_GENERATION_PRESETS: VideoImageGenerationPreset[] = [
+  {
+    id: "vertical_9_16",
+    label: "9:16 竖屏",
+    aspectRatio: "9:16",
+    size: "1024x1792",
+    quality: "auto",
+  },
+  {
+    id: "square_1_1",
+    label: "1:1 方图",
+    aspectRatio: "1:1",
+    size: "1024x1024",
+    quality: "auto",
+  },
+  {
+    id: "landscape_16_9",
+    label: "16:9 横屏",
+    aspectRatio: "16:9",
+    size: "1792x1024",
+    quality: "auto",
+  },
+]
 
 export const VIDEO_ASSET_CATEGORY_OPTIONS: VideoAssetCategoryOption[] = [
   { kind: "stickman_image", label: "火柴人图", accepts: "image/*" },
@@ -127,6 +198,46 @@ function isInsufficientBalanceError(error: unknown) {
 
 function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error || "未知错误"))
+}
+
+function resolveImagePreset(value: unknown) {
+  return (
+    IMAGE_GENERATION_PRESETS.find((preset) => preset.id === value) ||
+    IMAGE_GENERATION_PRESETS[0]
+  )
+}
+
+function normalizeImageQuality(
+  value: unknown,
+  fallback: VideoImageGenerationSettings["quality"]
+) {
+  return value === "high" ||
+    value === "medium" ||
+    value === "low" ||
+    value === "auto"
+    ? value
+    : fallback
+}
+
+function clampStyleStrength(value: unknown) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 50
+  return Math.max(0, Math.min(100, Math.floor(number)))
+}
+
+export function normalizeVideoImageGenerationSettings(
+  input: NormalizeVideoImageGenerationSettingsInput = {}
+): VideoImageGenerationSettings {
+  const preset = resolveImagePreset(input.presetId)
+  return {
+    presetId: preset.id,
+    aspectRatio: preset.aspectRatio,
+    size: cleanText(input.advanced?.size, preset.size),
+    quality: normalizeImageQuality(input.advanced?.quality, preset.quality),
+    styleStrength: clampStyleStrength(
+      input.advanced?.styleStrength ?? input.styleStrength
+    ),
+  }
 }
 
 export async function runStickmanImageGenerationQueue<T>({
@@ -236,8 +347,10 @@ export function buildVideoImageGenerationRequest({
   profile,
   prompt,
   negativePrompt,
+  settings = normalizeVideoImageGenerationSettings(),
   model = profile.model,
 }: BuildVideoImageGenerationRequestInput): VideoImageGenerationRequest {
+  const normalizedSettings = normalizeVideoImageGenerationSettings(settings)
   return {
     endpoint: "/api/codex/images/generations",
     model: cleanText(model, "gpt-image-2-2K"),
@@ -246,6 +359,10 @@ export function buildVideoImageGenerationRequest({
     apiBaseUrl: profile.apiBaseUrl,
     apiKey: profile.apiKey,
     profileId: profile.profileId,
+    aspectRatio: normalizedSettings.aspectRatio,
+    size: normalizedSettings.size,
+    quality: normalizedSettings.quality,
+    styleStrength: normalizedSettings.styleStrength,
   }
 }
 
@@ -253,6 +370,7 @@ export async function generateStickmanStoryboardAsset({
   taskId,
   shot,
   profile,
+  settings,
   requestImages,
   wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
   maxAttempts = 3,
@@ -262,6 +380,7 @@ export async function generateStickmanStoryboardAsset({
     profile,
     prompt: shot.prompt || shot.visualDescription || shot.voiceText,
     negativePrompt: shot.negativePrompt,
+    settings,
   })
   let lastError: unknown
   const attempts = Math.max(1, Math.floor(maxAttempts))
@@ -309,6 +428,34 @@ export function createVideoAssetLogEntry(
 
 export function removeVideoAssetById(assets: VideoAsset[], assetId: string) {
   return assets.filter((asset) => asset.id !== assetId)
+}
+
+export function createPerShotImageGenerationPlan({
+  shots,
+  action,
+  shotId,
+}: CreatePerShotImageGenerationPlanInput): PerShotImageGenerationPlan {
+  const targets =
+    action === "regenerate"
+      ? shots.filter((shot) => shot.id === shotId)
+      : shots.filter(
+          (shot) => shot.status === "needs_asset" || shot.assetIds.length === 0
+        )
+
+  return {
+    action,
+    targets,
+    preserveSuccessfulAssets: true,
+  }
+}
+
+export function toggleVideoAssetPreviewExpansion(
+  expandedAssetIds: string[],
+  assetId: string
+) {
+  return expandedAssetIds.includes(assetId)
+    ? expandedAssetIds.filter((id) => id !== assetId)
+    : [...expandedAssetIds, assetId]
 }
 
 export function serializeVideoAssetsForSnapshot(assets: VideoAsset[]) {

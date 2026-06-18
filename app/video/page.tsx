@@ -72,12 +72,18 @@ import {
   type ApiProfileStore,
 } from "@/lib/api-profiles"
 import {
+  IMAGE_GENERATION_PRESETS,
   VIDEO_ASSET_CATEGORY_OPTIONS,
   createImportedVideoAsset,
+  createPerShotImageGenerationPlan,
   createVideoAssetLogEntry,
   generateStickmanStoryboardAsset,
+  normalizeVideoImageGenerationSettings,
   removeVideoAssetById,
   runStickmanImageGenerationQueue,
+  toggleVideoAssetPreviewExpansion,
+  type VideoImageGenerationPresetId,
+  type VideoImageGenerationSettings,
 } from "@/lib/video-assets"
 import {
   SCRIPT_REWRITE_MODE_OPTIONS,
@@ -222,6 +228,13 @@ function VideoFactoryShell() {
     useState<VideoAssetKind>("yanling_clip")
   const [assetImportName, setAssetImportName] = useState("")
   const [videoAssets, setVideoAssets] = useState<VideoAsset[]>([])
+  const [imageGenerationSettings, setImageGenerationSettings] =
+    useState<VideoImageGenerationSettings>(() =>
+      normalizeVideoImageGenerationSettings()
+    )
+  const [showAdvancedImageSettings, setShowAdvancedImageSettings] =
+    useState(false)
+  const [expandedAssetIds, setExpandedAssetIds] = useState<string[]>([])
   const [isGeneratingStickmanImages, setIsGeneratingStickmanImages] =
     useState(false)
   const [stickmanProgress, setStickmanProgress] = useState("")
@@ -808,11 +821,64 @@ function VideoFactoryShell() {
     (item) => item.visualType === "stickman" && hasGeneratedStickmanAsset(item)
   ).length
 
-  const generateStickmanAsset = async () => {
-    const stickmanShots = storyboardShots.filter(
-      (item) =>
-        item.visualType === "stickman" && !hasGeneratedStickmanAsset(item)
+  const updateImageGenerationPreset = (presetId: VideoImageGenerationPresetId) => {
+    setImageGenerationSettings((current) =>
+      normalizeVideoImageGenerationSettings({
+        ...current,
+        presetId,
+        styleStrength: current.styleStrength,
+      })
     )
+  }
+
+  const updateAdvancedImageSetting = (
+    patch: Partial<Pick<VideoImageGenerationSettings, "size" | "quality" | "styleStrength">>
+  ) => {
+    setImageGenerationSettings((current) =>
+      normalizeVideoImageGenerationSettings({
+        ...current,
+        advanced: {
+          size: patch.size ?? current.size,
+          quality: patch.quality ?? current.quality,
+          styleStrength: patch.styleStrength ?? current.styleStrength,
+        },
+      })
+    )
+  }
+
+  const fillFailedStickmanShots = () => {
+    const plan = createPerShotImageGenerationPlan({
+      shots: storyboardShots.filter((shot) => shot.visualType === "stickman"),
+      action: "fill_failed",
+    })
+    void generateStickmanAsset(plan.targets as StoryboardShot[], "补图")
+  }
+
+  const regenerateStickmanShot = (shotId: string) => {
+    const plan = createPerShotImageGenerationPlan({
+      shots: storyboardShots.filter((shot) => shot.visualType === "stickman"),
+      action: "regenerate",
+      shotId,
+    })
+    void generateStickmanAsset(plan.targets as StoryboardShot[], "重新生成")
+  }
+
+  const toggleAssetPreview = (assetId: string) => {
+    setExpandedAssetIds((current) =>
+      toggleVideoAssetPreviewExpansion(current, assetId)
+    )
+  }
+
+  const generateStickmanAsset = async (
+    targetShots?: StoryboardShot[],
+    actionLabel = "生成火柴人图"
+  ) => {
+    const stickmanShots =
+      targetShots ||
+      storyboardShots.filter(
+        (item) =>
+          item.visualType === "stickman" && !hasGeneratedStickmanAsset(item)
+      )
     if (!activeTask || !stickmanShots.length) {
       setToast(
         storyboardShots.some((item) => item.visualType === "stickman")
@@ -851,9 +917,10 @@ function VideoFactoryShell() {
               taskId: activeTask.id,
               shot,
               profile,
+              settings: imageGenerationSettings,
               onAttempt: (attempt, maxAttempts) =>
                 setStickmanProgress(
-                  `已完成 ${completed}/${stickmanShots.length} · 运行中 · ${shot.id} · 第 ${attempt}/${maxAttempts} 次`
+                  `${actionLabel} · 已完成 ${completed}/${stickmanShots.length} · 运行中 · ${shot.id} · 第 ${attempt}/${maxAttempts} 次`
                 ),
               requestImages: async (request) => {
                 const response = await fetch(request.endpoint, {
@@ -868,6 +935,10 @@ function VideoFactoryShell() {
                     negative_prompt: request.negativePrompt,
                     apiBaseUrl: request.apiBaseUrl,
                     apiKey: request.apiKey,
+                    size: request.size,
+                    quality: request.quality,
+                    aspectRatio: request.aspectRatio,
+                    styleStrength: request.styleStrength,
                     n: 1,
                   }),
                 })
@@ -1402,14 +1473,28 @@ function VideoFactoryShell() {
             {activeModule === "assets" ? (
               <VideoAssetLibraryPanel
                 assets={videoAssets}
+                stickmanShots={storyboardShots.filter(
+                  (shot) => shot.visualType === "stickman"
+                )}
+                imageSettings={imageGenerationSettings}
+                showAdvancedImageSettings={showAdvancedImageSettings}
+                expandedAssetIds={expandedAssetIds}
                 generatingStickman={isGeneratingStickmanImages}
                 stickmanProgress={stickmanProgress}
                 stickmanShotCount={stickmanShotCount}
                 generatedStickmanShotCount={generatedStickmanShotCount}
                 importKind={assetImportKind}
                 importName={assetImportName}
+                onImagePresetChange={updateImageGenerationPreset}
+                onAdvancedImageSettingChange={updateAdvancedImageSetting}
+                onShowAdvancedImageSettingsChange={
+                  setShowAdvancedImageSettings
+                }
                 onGenerateStickman={generateStickmanAsset}
+                onFillFailedStickman={fillFailedStickmanShots}
+                onRegenerateShot={regenerateStickmanShot}
                 onStopStickman={stopStickmanGeneration}
+                onToggleAssetPreview={toggleAssetPreview}
                 onImportKindChange={setAssetImportKind}
                 onImportNameChange={setAssetImportName}
                 onImportAsset={importVideoAsset}
@@ -2240,28 +2325,52 @@ function StoryboardPanel({
 
 function VideoAssetLibraryPanel({
   assets,
+  stickmanShots,
+  imageSettings,
+  showAdvancedImageSettings,
+  expandedAssetIds,
   generatingStickman,
   stickmanProgress,
   stickmanShotCount,
   generatedStickmanShotCount,
   importKind,
   importName,
+  onImagePresetChange,
+  onAdvancedImageSettingChange,
+  onShowAdvancedImageSettingsChange,
   onGenerateStickman,
+  onFillFailedStickman,
+  onRegenerateShot,
   onStopStickman,
+  onToggleAssetPreview,
   onImportKindChange,
   onImportNameChange,
   onImportAsset,
   onRemoveAsset,
 }: {
   assets: VideoAsset[]
+  stickmanShots: StoryboardShot[]
+  imageSettings: VideoImageGenerationSettings
+  showAdvancedImageSettings: boolean
+  expandedAssetIds: string[]
   generatingStickman: boolean
   stickmanProgress: string
   stickmanShotCount: number
   generatedStickmanShotCount: number
   importKind: VideoAssetKind
   importName: string
+  onImagePresetChange: (value: VideoImageGenerationPresetId) => void
+  onAdvancedImageSettingChange: (
+    patch: Partial<
+      Pick<VideoImageGenerationSettings, "size" | "quality" | "styleStrength">
+    >
+  ) => void
+  onShowAdvancedImageSettingsChange: (value: boolean) => void
   onGenerateStickman: () => void | Promise<void>
+  onFillFailedStickman: () => void
+  onRegenerateShot: (shotId: string) => void
   onStopStickman: () => void
+  onToggleAssetPreview: (assetId: string) => void
   onImportKindChange: (value: VideoAssetKind) => void
   onImportNameChange: (value: string) => void
   onImportAsset: () => void
@@ -2285,6 +2394,95 @@ function VideoAssetLibraryPanel({
       </div>
 
       <div className="grid gap-4">
+        <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grid min-w-44 gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                图片预设
+              </span>
+              <select
+                value={imageSettings.presetId}
+                onChange={(event) =>
+                  onImagePresetChange(
+                    event.target.value as VideoImageGenerationPresetId
+                  )
+                }
+                className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+              >
+                {IMAGE_GENERATION_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
+              {imageSettings.aspectRatio} · {imageSettings.size} ·{" "}
+              {imageSettings.quality}
+            </div>
+            <label className="flex h-9 items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showAdvancedImageSettings}
+                onChange={(event) =>
+                  onShowAdvancedImageSettingsChange(event.target.checked)
+                }
+              />
+              显示高级参数
+            </label>
+          </div>
+
+          {showAdvancedImageSettings ? (
+            <div className="grid grid-cols-3 gap-3 max-lg:grid-cols-1">
+              <TextField
+                label="尺寸"
+                value={imageSettings.size}
+                onChange={(value) =>
+                  onAdvancedImageSettingChange({ size: value })
+                }
+              />
+              <label className="grid gap-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  质量
+                </span>
+                <select
+                  value={imageSettings.quality}
+                  onChange={(event) =>
+                    onAdvancedImageSettingChange({
+                      quality: event.target
+                        .value as VideoImageGenerationSettings["quality"],
+                    })
+                  }
+                  className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+                >
+                  {["auto", "high", "medium", "low"].map((quality) => (
+                    <option key={quality} value={quality}>
+                      {quality}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  风格强度 {imageSettings.styleStrength}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={imageSettings.styleStrength}
+                  onChange={(event) =>
+                    onAdvancedImageSettingChange({
+                      styleStrength: Number(event.target.value),
+                    })
+                  }
+                  className="h-9"
+                />
+              </label>
+            </div>
+          ) : null}
+        </div>
+
         <div className="flex flex-wrap items-end gap-3">
           <Button disabled={generatingStickman} onClick={onGenerateStickman}>
             <ImagePlus className="size-4" />
@@ -2293,6 +2491,14 @@ function VideoAssetLibraryPanel({
               : hasRemainingStickman && hasGeneratedStickman
                 ? "继续未完成"
                 : "生成火柴人图"}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={generatingStickman}
+            onClick={onFillFailedStickman}
+          >
+            <ImagePlus className="size-4" />
+            补图
           </Button>
           {generatingStickman ? (
             <Button variant="outline" onClick={onStopStickman}>
@@ -2339,6 +2545,42 @@ function VideoAssetLibraryPanel({
           </Button>
         </div>
 
+        {stickmanShots.length ? (
+          <div className="grid gap-2">
+            {stickmanShots.map((shot) => {
+              const shotAsset = assets.find(
+                (asset) =>
+                  asset.kind === "stickman_image" &&
+                  asset.tags?.includes("generated_image") &&
+                  asset.tags?.includes(shot.id)
+              )
+              return (
+                <div
+                  key={shot.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {shot.id}
+                    </span>
+                    <span className="ml-2 text-muted-foreground">
+                      {shotAsset ? "ready" : shot.status}
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={generatingStickman}
+                    onClick={() => onRegenerateShot(shot.id)}
+                  >
+                    重新生成
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        ) : null}
+
         <div className="grid gap-2">
           {assets.length ? (
             assets.map((asset) => (
@@ -2348,24 +2590,34 @@ function VideoAssetLibraryPanel({
               >
                 <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
                   {asset.kind.includes("image") && asset.previewUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={asset.previewUrl}
-                      alt={asset.displayName}
-                      className="size-14 rounded-md border object-cover"
-                    />
+                    <button
+                      type="button"
+                      className="text-left"
+                      onClick={() => onToggleAssetPreview(asset.id)}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={asset.previewUrl}
+                        alt={asset.displayName}
+                        className={`rounded-md border object-cover ${
+                          expandedAssetIds.includes(asset.id)
+                            ? "h-72 w-40"
+                            : "size-14"
+                        }`}
+                      />
+                    </button>
                   ) : (
                     <div className="grid size-14 place-items-center rounded-md border bg-background text-muted-foreground">
                       <ImagePlus className="size-4" />
                     </div>
                   )}
                   <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">
-                    {asset.displayName}
-                  </div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {asset.kind} · {asset.file.path}
-                  </div>
+                    <div className="truncate text-sm font-medium">
+                      {asset.displayName}
+                    </div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">
+                      {asset.kind} · {asset.file.path}
+                    </div>
                   </div>
                 </div>
                 <Button

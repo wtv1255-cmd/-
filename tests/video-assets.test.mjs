@@ -123,6 +123,75 @@ test("stickman storyboard image generation retries transient failures", async ()
   assert.equal(result.image.dataUrl, "data:image/png;base64,AA==")
 })
 
+test("image generation presets default to vertical 9:16 with advanced overrides", async () => {
+  const {
+    IMAGE_GENERATION_PRESETS,
+    normalizeVideoImageGenerationSettings,
+    buildVideoImageGenerationRequest,
+  } = await importVideoAssetsModule()
+  const settings = normalizeVideoImageGenerationSettings({
+    presetId: "vertical_9_16",
+    advanced: {
+      size: "1024x1792",
+      quality: "high",
+      styleStrength: 68,
+    },
+  })
+  const request = buildVideoImageGenerationRequest({
+    profile: {
+      service: "image_generation",
+      profileId: "image-main",
+      apiBaseUrl: "https://image.example.com/v1",
+      model: "gpt-image-2-4K",
+      apiKey: "fixture",
+    },
+    prompt: "黑白火柴人震惊表情",
+    negativePrompt: "复杂背景",
+    settings,
+  })
+
+  assert.equal(IMAGE_GENERATION_PRESETS[0].id, "vertical_9_16")
+  assert.equal(settings.aspectRatio, "9:16")
+  assert.equal(settings.size, "1024x1792")
+  assert.equal(settings.quality, "high")
+  assert.equal(settings.styleStrength, 68)
+  assert.equal(request.aspectRatio, "9:16")
+  assert.equal(request.size, "1024x1792")
+})
+
+test("per-shot generation plan skips successful shots unless regenerate is explicit", async () => {
+  const {
+    createPerShotImageGenerationPlan,
+    toggleVideoAssetPreviewExpansion,
+  } = await importVideoAssetsModule()
+  const shots = [
+    { id: "shot_01", status: "ready", assetIds: ["asset_01"] },
+    { id: "shot_02", status: "needs_asset", assetIds: [] },
+    { id: "shot_03", status: "ready", assetIds: ["asset_03"] },
+  ]
+  const fillPlan = createPerShotImageGenerationPlan({
+    shots,
+    action: "fill_failed",
+  })
+  const regeneratePlan = createPerShotImageGenerationPlan({
+    shots,
+    action: "regenerate",
+    shotId: "shot_03",
+  })
+
+  assert.deepEqual(
+    fillPlan.targets.map((shot) => shot.id),
+    ["shot_02"]
+  )
+  assert.deepEqual(
+    regeneratePlan.targets.map((shot) => shot.id),
+    ["shot_03"]
+  )
+  assert.equal(regeneratePlan.preserveSuccessfulAssets, true)
+  assert.deepEqual(toggleVideoAssetPreviewExpansion([], "asset_03"), ["asset_03"])
+  assert.deepEqual(toggleVideoAssetPreviewExpansion(["asset_03"], "asset_03"), [])
+})
+
 test("stickman storyboard image generation stops immediately on insufficient balance", async () => {
   const { generateStickmanStoryboardAsset } = await importVideoAssetsModule()
   let attempts = 0
