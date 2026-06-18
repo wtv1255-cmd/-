@@ -99,6 +99,8 @@ import {
   type VideoImageGenerationSettings,
 } from "@/lib/video-assets"
 import {
+  COPYWRITING_BOARD_OPTIONS,
+  DEFAULT_PRODUCT_CONVERSION_THEME,
   SCRIPT_REWRITE_MODE_OPTIONS,
   buildScriptGenerationRequest,
   createDefaultScriptWorkflowSettings,
@@ -108,6 +110,7 @@ import {
   readScriptWorkflowSettings,
   saveScriptWorkflowSettings,
   shouldRequestTextModelForScriptMode,
+  type CopywritingBoardId,
   type ScriptGenerationRequest,
   type ScriptRewriteMode,
   type ScriptWorkflowMode,
@@ -465,6 +468,11 @@ function VideoFactoryShell() {
     useState<ScriptWorkflowMode>("semi_auto")
   const [scriptRewriteMode, setScriptRewriteMode] =
     useState<ScriptRewriteMode>("rewrite_b")
+  const [scriptCopywritingBoard, setScriptCopywritingBoard] =
+    useState<CopywritingBoardId>("generic_rewrite")
+  const [scriptConversionTheme, setScriptConversionTheme] = useState(
+    DEFAULT_PRODUCT_CONVERSION_THEME
+  )
   const [showAdvancedRewrite, setShowAdvancedRewrite] = useState(false)
   const [scriptWorkflowSettings, setScriptWorkflowSettings] =
     useState<ScriptWorkflowSettings>(createDefaultScriptWorkflowSettings)
@@ -532,6 +540,8 @@ function VideoFactoryShell() {
         const restoredScriptSettings = readScriptWorkflowSettings()
         setScriptWorkflowSettings(restoredScriptSettings)
         setScriptRewriteMode(restoredScriptSettings.fullAutoRewriteMode)
+        setScriptCopywritingBoard(restoredScriptSettings.copywritingBoard)
+        setScriptConversionTheme(restoredScriptSettings.conversionTheme)
       } catch {
         setPublishDraft(null)
         setTasks([])
@@ -540,6 +550,8 @@ function VideoFactoryShell() {
         const defaults = createDefaultScriptWorkflowSettings()
         setScriptWorkflowSettings(defaults)
         setScriptRewriteMode(defaults.fullAutoRewriteMode)
+        setScriptCopywritingBoard(defaults.copywritingBoard)
+        setScriptConversionTheme(defaults.conversionTheme)
       }
     })
     return () => {
@@ -686,17 +698,25 @@ function VideoFactoryShell() {
     setToast(value ? "已设置任务临时音色" : "已恢复全局默认音色")
   }
 
-  const saveScriptWorkflowPreference = (mode: ScriptRewriteMode) => {
+  const saveScriptWorkflowPreference = (
+    mode: ScriptRewriteMode,
+    board = scriptCopywritingBoard,
+    conversionTheme = scriptConversionTheme
+  ) => {
     const nextSettings: ScriptWorkflowSettings = {
       ...scriptWorkflowSettings,
       fullAutoRewriteMode: mode,
+      copywritingBoard: board,
+      conversionTheme,
     }
     setScriptWorkflowSettings(nextSettings)
     saveScriptWorkflowSettings(nextSettings)
     if (scriptWorkflowMode === "full_auto") {
       setScriptRewriteMode(mode)
     }
-    setToast("全自动改写偏好已保存")
+    setScriptCopywritingBoard(board)
+    setScriptConversionTheme(conversionTheme)
+    setToast("文案板子偏好已保存")
   }
 
   const checkTtsSettings = async (settings = ttsSettings) => {
@@ -957,6 +977,10 @@ function VideoFactoryShell() {
       scriptWorkflowMode === "full_auto"
         ? scriptWorkflowSettings.fullAutoRewriteMode
         : scriptRewriteMode
+    const effectiveCopywritingBoard =
+      scriptWorkflowMode === "full_auto"
+        ? scriptWorkflowSettings.copywritingBoard
+        : scriptCopywritingBoard
     if (!shouldRequestTextModelForScriptMode(effectiveRewriteMode)) {
       applyPastedScript()
       return
@@ -977,6 +1001,8 @@ function VideoFactoryShell() {
             durationPreset: "45-60s",
             packageId: "stickman_meme",
             rewriteMode: effectiveRewriteMode,
+            copywritingBoard: effectiveCopywritingBoard,
+            conversionTheme: scriptConversionTheme,
           })
           return requestScriptGenerationText(request)
         }
@@ -1033,6 +1059,8 @@ function VideoFactoryShell() {
       script: analysisDraft.originalScript,
       packageIds: selectedPackages,
       durationPreset: selectedDuration,
+      copywritingBoard: scriptCopywritingBoard,
+      conversionTheme: scriptConversionTheme,
     })
     setStoryboardShots(nextShots)
     updateActiveTaskSnapshot((snapshot) => ({
@@ -1764,10 +1792,14 @@ function VideoFactoryShell() {
                 fullAutoRewriteMode={
                   scriptWorkflowSettings.fullAutoRewriteMode
                 }
+                copywritingBoard={scriptCopywritingBoard}
+                conversionTheme={scriptConversionTheme}
                 showAdvancedRewrite={showAdvancedRewrite}
                 onTopicChange={setAnalysisTopic}
                 onWorkflowModeChange={setScriptWorkflowMode}
                 onRewriteModeChange={setScriptRewriteMode}
+                onCopywritingBoardChange={setScriptCopywritingBoard}
+                onConversionThemeChange={setScriptConversionTheme}
                 onSaveWorkflowSettings={saveScriptWorkflowPreference}
                 onShowAdvancedRewriteChange={setShowAdvancedRewrite}
                 onUsePastedScript={applyPastedScript}
@@ -2289,10 +2321,14 @@ function ScriptAnalysisPanel({
   workflowMode,
   rewriteMode,
   fullAutoRewriteMode,
+  copywritingBoard,
+  conversionTheme,
   showAdvancedRewrite,
   onTopicChange,
   onWorkflowModeChange,
   onRewriteModeChange,
+  onCopywritingBoardChange,
+  onConversionThemeChange,
   onSaveWorkflowSettings,
   onShowAdvancedRewriteChange,
   onUsePastedScript,
@@ -2305,11 +2341,19 @@ function ScriptAnalysisPanel({
   workflowMode: ScriptWorkflowMode
   rewriteMode: ScriptRewriteMode
   fullAutoRewriteMode: ScriptRewriteMode
+  copywritingBoard: CopywritingBoardId
+  conversionTheme: string
   showAdvancedRewrite: boolean
   onTopicChange: (value: string) => void
   onWorkflowModeChange: (value: ScriptWorkflowMode) => void
   onRewriteModeChange: (value: ScriptRewriteMode) => void
-  onSaveWorkflowSettings: (value: ScriptRewriteMode) => void
+  onCopywritingBoardChange: (value: CopywritingBoardId) => void
+  onConversionThemeChange: (value: string) => void
+  onSaveWorkflowSettings: (
+    value: ScriptRewriteMode,
+    board?: CopywritingBoardId,
+    conversionTheme?: string
+  ) => void
   onShowAdvancedRewriteChange: (value: boolean) => void
   onUsePastedScript: () => void
   onGenerateDraft: () => void
@@ -2321,6 +2365,7 @@ function ScriptAnalysisPanel({
   const activeFullAutoOption =
     SCRIPT_REWRITE_MODE_OPTIONS.find((option) => option.id === fullAutoRewriteMode) ||
     SCRIPT_REWRITE_MODE_OPTIONS[2]
+  const productBoardSelected = copywritingBoard === "product_conversion"
 
   return (
     <section className="rounded-lg border bg-background p-5">
@@ -2371,6 +2416,68 @@ function ScriptAnalysisPanel({
             </label>
           </div>
 
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                文案板子 / 模板
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                产品引流只是其中一个板子
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
+              {COPYWRITING_BOARD_OPTIONS.map((option) => {
+                const active = copywritingBoard === option.id
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`rounded-lg border p-3 text-left transition ${
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "bg-background hover:bg-muted"
+                    }`}
+                    onClick={() => {
+                      onCopywritingBoardChange(option.id)
+                      if (
+                        option.id === "product_conversion" &&
+                        !conversionTheme.trim()
+                      ) {
+                        onConversionThemeChange(
+                          option.defaultConversionTheme ||
+                            DEFAULT_PRODUCT_CONVERSION_THEME
+                        )
+                      }
+                    }}
+                  >
+                    <div className="text-sm font-medium">{option.label}</div>
+                    <div className="mt-1 text-xs leading-5 opacity-80">
+                      {option.description}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            {productBoardSelected ? (
+              <div className="grid gap-2 rounded-lg border bg-background p-3">
+                <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                  引流产品/主题
+                  <input
+                    value={conversionTheme}
+                    onChange={(event) =>
+                      onConversionThemeChange(event.target.value)
+                    }
+                    className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring/20"
+                    placeholder={DEFAULT_PRODUCT_CONVERSION_THEME}
+                  />
+                </label>
+                <div className="text-xs leading-5 text-muted-foreground">
+                  默认锁定豆包、炎灵、剪映；成片口播只保留评论区行动，粉丝群和微信话术在视频外处理。
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="grid grid-cols-4 gap-2 max-lg:grid-cols-2 max-sm:grid-cols-1">
             {visibleRewriteOptions.map((option) => {
               const active = rewriteMode === option.id
@@ -2399,7 +2506,13 @@ function ScriptAnalysisPanel({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => onSaveWorkflowSettings(rewriteMode)}
+              onClick={() =>
+                onSaveWorkflowSettings(
+                  rewriteMode,
+                  copywritingBoard,
+                  conversionTheme
+                )
+              }
             >
               <Save className="size-4" />
               保存全自动偏好

@@ -54,6 +54,27 @@ test("script module exposes workflow modes passthrough and advanced rewrite chan
   assert.match(source, /onSaveWorkflowSettings/)
 })
 
+test("script module exposes copywriting boards and optional product theme controls", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /COPYWRITING_BOARD_OPTIONS/)
+  assert.match(source, /文案板子/)
+  assert.match(source, /模板/)
+  assert.match(source, /option\.label/)
+  assert.match(source, /option\.description/)
+  assert.match(source, /引流产品\/主题/)
+  assert.match(source, /DEFAULT_PRODUCT_CONVERSION_THEME/)
+  assert.match(source, /scriptCopywritingBoard/)
+  assert.match(source, /scriptConversionTheme/)
+  assert.match(source, /copywritingBoard: effectiveCopywritingBoard/)
+  assert.match(source, /conversionTheme: scriptConversionTheme/)
+  assert.match(source, /copywritingBoard: scriptCopywritingBoard/)
+  assert.match(source, /copywritingBoard === "product_conversion"/)
+  assert.match(source, /评论区/)
+  assert.match(source, /粉丝群/)
+  assert.match(source, /shouldRequestTextModelForScriptMode\(effectiveRewriteMode\)/)
+})
+
 test("asset module exposes preset parameters per-shot actions and preview expansion", async () => {
   const source = await readVideoPage()
 
