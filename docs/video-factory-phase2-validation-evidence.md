@@ -13,7 +13,7 @@
 - `node --test tests/api-profiles.test.mjs tests/video-factory-modules.test.mjs tests/video-analysis.test.mjs tests/video-assets.test.mjs`
 - `pnpm exec tsc --noEmit`
 - `pnpm exec eslint app/video/page.tsx tests/api-profiles.test.mjs tests/video-factory-modules.test.mjs`
-- Playwright MCP 打开 `http://127.0.0.1:48606/video`，确认设置模块显示 API Profile、文本模型、图片生成和视频解析配置。
+- Playwright MCP 打开 `http://127.0.0.1:48606/video`，确认设置模块显示 API Profile，并明确文本和图片生成的 API Profile 设置已接入运行时主备；视频解析和发布辅助是配置预留。
 - Playwright MCP 截图：`follow01-api-profile-settings.png`。
 
 ## 包体检查
@@ -38,7 +38,7 @@
 
 - 桌面包已生成并可检查文件结构。
 - 包体没有内置 Index-TTS2、checkpoint、venv 或常见大模型权重。
-- 开发服务器 UI 已通过 Playwright 验证核心模块、恢复摘要和 API Profile 设置页。
+- 开发服务器 UI 已通过 Playwright 验证核心模块、恢复摘要和 API Profile 设置页；API failover 的运行时证据限定为文本和图片生成路径。
 - 运行时 failover、恢复续跑、素材补图、TTS/字幕、时间线和剪映草稿合同由自动化测试覆盖。
 
 ## 手工验收清单
@@ -47,7 +47,7 @@
 
 1. 启动 `dist-desktop/win-unpacked/她火.exe`。
 2. 输入有效签名 license，确认视频工厂功能启用。
-3. 在设置中配置文本模型和图片生成的主备 API Profile。
+3. 在设置中配置文本模型和图片生成的主备 API Profile；视频解析和发布辅助配置只作为预留项检查。
 4. 创建视频任务，执行文案生成、分镜、火柴人生图、补图、TTS、字幕、时间线和剪映草稿生成。
 5. 人为让主 API 返回 503/429 或移除主 key，确认备份 profile 被使用，任务记录不出现 API Key。
 6. 关闭并重启应用，确认安全步骤自动续跑，已成功图片、音频、字幕和草稿不被重做。
