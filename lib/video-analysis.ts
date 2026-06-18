@@ -42,6 +42,8 @@ export type ScriptRewriteMode =
 
 export type ScriptWorkflowMode = "semi_auto" | "full_auto"
 
+export type CopywritingBoardId = "generic_rewrite" | "product_conversion"
+
 export type ScriptRewriteModeOption = {
   id: ScriptRewriteMode
   label: string
@@ -49,9 +51,18 @@ export type ScriptRewriteModeOption = {
   advancedOnly: boolean
 }
 
+export type CopywritingBoardOption = {
+  id: CopywritingBoardId
+  label: string
+  description: string
+  defaultConversionTheme?: string
+}
+
 export type ScriptWorkflowSettings = {
   version: 1
   fullAutoRewriteMode: ScriptRewriteMode
+  copywritingBoard: CopywritingBoardId
+  conversionTheme: string
 }
 
 export type CreateManualVideoAnalysisDraftInput = {
@@ -81,6 +92,8 @@ export type BuildScriptGenerationRequestInput = {
   durationPreset: VideoDurationPreset
   packageId: VideoPackageId
   rewriteMode?: ScriptRewriteMode
+  copywritingBoard?: CopywritingBoardId
+  conversionTheme?: string
   model?: string
 }
 
@@ -115,6 +128,8 @@ const structureLabels = [
 export const SCRIPT_WORKFLOW_SETTINGS_STORAGE_KEY =
   "ta-huo:video-script-workflow:v1"
 
+export const DEFAULT_PRODUCT_CONVERSION_THEME = "豆包 + 炎灵 + 剪映"
+
 export const SCRIPT_REWRITE_MODE_OPTIONS: ScriptRewriteModeOption[] = [
   {
     id: "original",
@@ -142,6 +157,20 @@ export const SCRIPT_REWRITE_MODE_OPTIONS: ScriptRewriteModeOption[] = [
   },
 ]
 
+export const COPYWRITING_BOARD_OPTIONS: CopywritingBoardOption[] = [
+  {
+    id: "generic_rewrite",
+    label: "通用洗稿",
+    description: "面向剧情、经验、观点类内容，只保留结构和情绪节奏。",
+  },
+  {
+    id: "product_conversion",
+    label: "产品引流",
+    description: "保留指定产品词，生成更像真人口播的引流脚本。",
+    defaultConversionTheme: DEFAULT_PRODUCT_CONVERSION_THEME,
+  },
+]
+
 const rewriteInstructions: Record<Exclude<ScriptRewriteMode, "original">, string> = {
   rewrite_a:
     "A 档轻改写：保留原脚本段落顺序和卖点，只替换措辞、节奏连接和口播细节，降低搬运感。",
@@ -155,10 +184,16 @@ function isScriptRewriteMode(value: unknown): value is ScriptRewriteMode {
   return SCRIPT_REWRITE_MODE_OPTIONS.some((option) => option.id === value)
 }
 
+export function isCopywritingBoardId(value: unknown): value is CopywritingBoardId {
+  return COPYWRITING_BOARD_OPTIONS.some((option) => option.id === value)
+}
+
 export function createDefaultScriptWorkflowSettings(): ScriptWorkflowSettings {
   return {
     version: 1,
     fullAutoRewriteMode: "rewrite_b",
+    copywritingBoard: "generic_rewrite",
+    conversionTheme: DEFAULT_PRODUCT_CONVERSION_THEME,
   }
 }
 
@@ -174,11 +209,49 @@ export function normalizeScriptWorkflowSettings(
     fullAutoRewriteMode: isScriptRewriteMode(raw.fullAutoRewriteMode)
       ? raw.fullAutoRewriteMode
       : defaults.fullAutoRewriteMode,
+    copywritingBoard: isCopywritingBoardId(raw.copywritingBoard)
+      ? raw.copywritingBoard
+      : defaults.copywritingBoard,
+    conversionTheme: cleanText(raw.conversionTheme, defaults.conversionTheme),
   }
 }
 
 export function shouldRequestTextModelForScriptMode(mode: ScriptRewriteMode) {
   return mode !== "original"
+}
+
+function buildCopywritingBoardInstructions(
+  board: CopywritingBoardId,
+  conversionTheme: string
+) {
+  if (board === "product_conversion") {
+    const lockedTerms = conversionTheme
+      .split(/[+＋、，,/\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const safeLockedTerms = lockedTerms.length
+      ? Array.from(new Set(lockedTerms)).join("、")
+      : "豆包、炎灵、剪映"
+
+    return [
+      "文案板子：产品引流",
+      `引流产品/主题：${conversionTheme}`,
+      `锁定产品词：${safeLockedTerms}`,
+      "这些产品词是锁定词，不要改成某工具、某软件、AI 平台等泛称。",
+      "按五段式口播输出：钩子、可信经历、三步流程、方法价值、评论区行动。",
+      "降低 AI 味：多用真人口语化短句，少用书面总结句，避免机械排比。",
+      "风险降级规则：日入/月入、保证、稳赚、赚够房租等收益承诺只能改成个人体验或效率感受。",
+      "风险降级规则：加微信、加群、私信发链接等直接站外导流不要写进成片口播，只保留评论区行动。",
+      "风险降级规则：粗口和辱骂统一降级为直给语气，不保留脏话。",
+    ]
+  }
+
+  return [
+    "文案板子：通用洗稿",
+    "这个板子只提炼结构、情绪节奏和表达方式，不绑定任何产品名或转化素材。",
+    "改写时保留可复用钩子、冲突、步骤和结尾互动，不添加额外产品流程。",
+    "输出要像真人短视频口播，句子短、节奏紧、少套话。",
+  ]
 }
 
 export function saveScriptWorkflowSettings(
@@ -433,9 +506,18 @@ export function buildScriptGenerationRequest({
   durationPreset,
   packageId,
   rewriteMode = "rewrite_b",
+  copywritingBoard = "generic_rewrite",
+  conversionTheme = DEFAULT_PRODUCT_CONVERSION_THEME,
   model = profile.model,
 }: BuildScriptGenerationRequestInput): ScriptGenerationRequest {
   const cleanedSource = cleanText(sourceText, "无转写内容，按用户主题生成")
+  const safeBoard = isCopywritingBoardId(copywritingBoard)
+    ? copywritingBoard
+    : "generic_rewrite"
+  const safeConversionTheme = cleanText(
+    conversionTheme,
+    DEFAULT_PRODUCT_CONVERSION_THEME
+  )
   const rewriteInstruction =
     rewriteMode === "original" ? rewriteInstructions.rewrite_b : rewriteInstructions[rewriteMode]
   return {
@@ -453,6 +535,7 @@ export function buildScriptGenerationRequest({
           `套餐：${packageLabel(packageId)}`,
           `目标时长：${durationPreset}`,
           `改写模式：${rewriteInstruction}`,
+          ...buildCopywritingBoardInstructions(safeBoard, safeConversionTheme),
           "不要直接复述来源文案，要先提炼结构，再改成一条新的火柴人爆款口播。",
           "严格按以下格式输出，字段名不要改：",
           "结构摘要：",

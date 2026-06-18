@@ -189,6 +189,68 @@ test("rewrite strengths expose A B C channels with B as full auto default", asyn
   assert.match(prompt, /不要直接复述来源文案/)
 })
 
+test("product conversion board locks product terms and downgrades risky copy", async () => {
+  const { buildScriptGenerationRequest } = await importVideoAnalysisModule()
+  const request = buildScriptGenerationRequest({
+    profile: {
+      service: "text_model",
+      profileId: "text-main",
+      apiBaseUrl: "https://text.example.com/v1",
+      model: "claude-opus-4-6-thinking",
+      apiKey: "fixture_text_secret",
+    },
+    sourceText:
+      "豆包加炎灵加剪映，一晚上搞定一部漫剧，日入八百，新手直接抄作业。",
+    durationPreset: "60-90s",
+    packageId: "tool_showcase",
+    rewriteMode: "rewrite_b",
+    copywritingBoard: "product_conversion",
+    conversionTheme: "豆包 + 炎灵 + 剪映",
+  })
+
+  const prompt = JSON.stringify(request.messages)
+  assert.match(prompt, /文案板子/)
+  assert.match(prompt, /产品引流/)
+  assert.match(prompt, /引流产品\/主题：豆包 \+ 炎灵 \+ 剪映/)
+  assert.match(prompt, /锁定产品词：豆包、炎灵、剪映/)
+  assert.match(prompt, /五段式口播/)
+  assert.match(prompt, /钩子/)
+  assert.match(prompt, /可信经历/)
+  assert.match(prompt, /三步流程/)
+  assert.match(prompt, /方法价值/)
+  assert.match(prompt, /评论区行动/)
+  assert.match(prompt, /口语化/)
+  assert.match(prompt, /短句/)
+  assert.match(prompt, /日入|月入/)
+  assert.match(prompt, /保证|稳赚/)
+  assert.match(prompt, /加微信|加群/)
+  assert.match(prompt, /粗口/)
+})
+
+test("generic rewrite board does not force product terms or brand overlays", async () => {
+  const { buildScriptGenerationRequest } = await importVideoAnalysisModule()
+  const request = buildScriptGenerationRequest({
+    profile: {
+      service: "text_model",
+      profileId: "text-main",
+      apiBaseUrl: "https://text.example.com/v1",
+      model: "claude-opus-4-6-thinking",
+      apiKey: "fixture_text_secret",
+    },
+    sourceText: "普通剧情号复盘一个高反差故事，结尾提醒观众关注后续。",
+    durationPreset: "45-60s",
+    packageId: "stickman_meme",
+    rewriteMode: "rewrite_b",
+    copywritingBoard: "generic_rewrite",
+  })
+
+  const prompt = JSON.stringify(request.messages)
+  assert.match(prompt, /文案板子/)
+  assert.match(prompt, /通用洗稿/)
+  assert.doesNotMatch(prompt, /豆包|炎灵|剪映/)
+  assert.doesNotMatch(prompt, /引流产品|产品图标|品牌贴片|logo/)
+})
+
 test("model failure returns manual edit fallback without blocking workflow", async () => {
   const { createScriptGenerationFailureDraft } = await importVideoAnalysisModule()
   const draft = createScriptGenerationFailureDraft({
