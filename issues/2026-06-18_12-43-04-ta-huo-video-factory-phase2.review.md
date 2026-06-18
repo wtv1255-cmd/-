@@ -14,3 +14,19 @@
 - Assumptions: none
 - Decision debt: installed post-activation workflow remains limited to build/package inspection plus dev UI evidence
 - Human-required blockers: signed production video_factory license and computer-use tool access are unavailable for full installed post-activation clickthrough
+
+## REVIEW-02
+- Source doc: docs/superpowers/specs/2026-06-18-ta-huo-video-factory-phase2-design.md
+- Review agent: same-model sub-agent
+- Scope checked: REVIEW-01 follow-up closure for runtime API failover, recovery auto-resume, installed evidence archive, claim/evidence alignment, secret exposure, and remaining human-required blockers
+- Evidence checked: commits aa9fc1d, 4e91d32, db257e0; CSV state commits ad20503, e06d038, e9d2bec; tests api-profiles/video-task/video-factory-modules; docs/video-factory-phase2-validation-evidence.md; docs/video-factory-phase2-user-manual.md; Playwright evidence names
+- Claim/evidence alignment: mismatches found
+- Limited validation honestly reported: yes
+- Result: gaps_found
+- Gaps:
+  - FOLLOW-04: Wire runtime API failover for video_parsing and AI director/edit-analysis paths, or explicitly remove/narrow the Phase 2 claim if those modules are local-only in this app. Current code only wires live text_model and image_generation paths while broader module failover claims remain.
+  - FOLLOW-05: Correct user-facing/manual/evidence wording for API failover scope so it does not imply video parsing, publish helper, or AI director runtime failover passed unless those live paths are actually wired and tested.
+- Follow-up issues added: FOLLOW-04, FOLLOW-05, REVIEW-03
+- Assumptions: video_parsing and publish_helper profile groups exist as configuration contracts, but no separate external runtime call path is currently implemented in the app.
+- Decision debt: production provider failover and installed post-activation clickthrough still require valid license/API credentials and desktop control.
+- Human-required blockers: valid production video_factory license, real API credentials/provider control, and desktop control remain required for full installed post-activation/provider failover clickthrough.
