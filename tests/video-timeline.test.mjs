@@ -36,17 +36,52 @@ test("voice plan falls back to sentence timing when tts timestamps are missing",
   const { createVoicePlanFromScript } = await importTimelineModule()
   const voice = createVoicePlanFromScript({
     taskId: "task_01",
-    script: "第一句讲痛点。\n第二句演示流程。\n第三句引导收藏。",
-    durationPreset: "45-60s",
+    script: "短句。\n这一句明显更长，用来承载更多口播信息和节奏。",
+    durationPreset: "30-45s",
     audioFilename: "voice.wav",
+    speechRateCharsPerSecond: 10,
   })
 
-  assert.equal(voice.subtitles.length, 3)
+  assert.equal(voice.subtitles.length, 2)
   assert.equal(voice.subtitles[0].startMs, 0)
+  assert.ok(
+    voice.subtitles[1].endMs - voice.subtitles[1].startMs >
+      voice.subtitles[0].endMs - voice.subtitles[0].startMs
+  )
+  assert.equal(
+    voice.subtitles.at(-1).endMs,
+    Math.round((3 + 22) * 100)
+  )
   assert.equal(voice.audio.filename, "voice.wav")
   assert.equal(
     voice.audio.path,
     "%APPDATA%/她火/tasks/task_01/voice_audio/voice.wav"
+  )
+})
+
+test("voice plan prefers tts timestamp cues over fallback timing", async () => {
+  const { createVoicePlanFromScript } = await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script: "这段脚本会被 TTS 时间戳覆盖。\n第二句。",
+    durationPreset: "45-60s",
+    audioFilename: "tts.wav",
+    ttsCues: [
+      { text: "TTS 钩子", startMs: 320, endMs: 1820 },
+      { text: "TTS 证明", startMs: 2100, endMs: 4300 },
+    ],
+  })
+
+  assert.deepEqual(
+    voice.subtitles.map(({ startMs, endMs, text }) => ({
+      startMs,
+      endMs,
+      text,
+    })),
+    [
+      { startMs: 320, endMs: 1820, text: "TTS 钩子" },
+      { startMs: 2100, endMs: 4300, text: "TTS 证明" },
+    ]
   )
 })
 
@@ -144,6 +179,66 @@ test("timeline uses manual external material labels and creates placeholders for
   assert.equal(visualClips[0].assetId, "placeholder_opening_hook_shot_01")
   assert.equal(visualClips[1].assetId, "clip_named_hook_but_manual_tool")
   assert.equal(visualClips[2].assetId, "placeholder_product_proof_shot_03")
+})
+
+test("timeline regeneration preserves locked and manually selected visual assets", async () => {
+  const { createVoicePlanFromScript, createUnifiedVideoTimeline } =
+    await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script: "锁定片段。\n手动片段。\n可替换片段。",
+    durationPreset: "30-45s",
+  })
+  const previousTimeline = createUnifiedVideoTimeline({
+    taskId: "task_01",
+    voice,
+    storyboard: [
+      { id: "shot_01", assetIds: ["locked_old"], startMs: 0, endMs: 15000 },
+      { id: "shot_02", assetIds: ["manual_old"], startMs: 15000, endMs: 30000 },
+      { id: "shot_03", assetIds: ["replace_old"], startMs: 30000, endMs: 45000 },
+    ],
+  })
+
+  const regenerated = createUnifiedVideoTimeline({
+    taskId: "task_01",
+    voice,
+    previousTimeline,
+    storyboard: [
+      {
+        id: "shot_01",
+        assetIds: ["new_ai_asset_01"],
+        startMs: 0,
+        endMs: 15000,
+        lockedAssetId: "locked_old",
+      },
+      {
+        id: "shot_02",
+        assetIds: ["manual_old"],
+        startMs: 15000,
+        endMs: 30000,
+        assetSelection: "manual",
+      },
+      {
+        id: "shot_03",
+        assetIds: ["new_ai_asset_03"],
+        startMs: 30000,
+        endMs: 45000,
+        replaceAsset: true,
+      },
+    ],
+  })
+  const visualClips = regenerated.tracks.find((track) => track.id === "visual")
+    .clips
+
+  assert.equal(visualClips[0].assetId, "locked_old")
+  assert.equal(visualClips[1].assetId, "manual_old")
+  assert.equal(visualClips[2].assetId, "new_ai_asset_03")
+  assert.deepEqual(
+    previousTimeline.tracks.find((track) => track.id === "visual").clips.map(
+      (clip) => clip.assetId
+    ),
+    ["locked_old", "manual_old", "replace_old"]
+  )
 })
 
 test("duration presets control pacing across short and long modes", async () => {

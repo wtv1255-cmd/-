@@ -1267,6 +1267,7 @@ function VideoFactoryShell() {
       sfxAssetIds: videoAssets
         .filter((asset) => asset.kind === "sfx")
         .map((asset) => asset.id),
+      previousTimeline: videoTimeline || undefined,
     })
     const nextAssets = [
       ...placeholderAssets.filter(

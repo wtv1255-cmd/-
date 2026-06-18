@@ -14,6 +14,12 @@ export type CreateVoicePlanFromScriptInput = {
   script: string
   durationPreset: VideoDurationPreset
   audioFilename?: string
+  ttsCues?: Array<{
+    text: string
+    startMs: number
+    endMs: number
+  }>
+  speechRateCharsPerSecond?: number
 }
 
 export type TimelineStoryboardInput = {
@@ -22,6 +28,9 @@ export type TimelineStoryboardInput = {
   startMs: number
   endMs: number
   requiredMaterialLabel?: ExternalMaterialLabelId
+  lockedAssetId?: string
+  assetSelection?: "auto" | "manual"
+  replaceAsset?: boolean
 }
 
 export type CreateUnifiedVideoTimelineInput = {
@@ -31,6 +40,7 @@ export type CreateUnifiedVideoTimelineInput = {
   externalAssets?: Pick<VideoAsset, "id" | "tags">[]
   bgmAssetId?: string
   sfxAssetIds?: string[]
+  previousTimeline?: VideoTimeline
 }
 
 const durationMsByPreset: Record<VideoDurationPreset, number> = {
@@ -86,10 +96,91 @@ function placeholderAssetId(labelId: ExternalMaterialLabelId, shotId: string) {
   return `placeholder_${labelId}_${cleanSegment(shotId, "shot")}`
 }
 
+function cueCharLength(text: string) {
+  return Math.max(1, Array.from(cleanText(text)).length)
+}
+
+function normalizeCueTiming(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value)
+  return Math.max(0, Math.round(Number.isFinite(numberValue) ? numberValue : 0))
+}
+
+function createSubtitleCuesFromTts(
+  ttsCues: CreateVoicePlanFromScriptInput["ttsCues"]
+) {
+  const cues = (ttsCues || [])
+    .map((cue, index) => {
+      const startMs = normalizeCueTiming(cue.startMs)
+      const endMs = normalizeCueTiming(cue.endMs)
+      const text = cleanText(cue.text)
+      if (!text || endMs <= startMs) return null
+
+      return {
+        id: `subtitle_${String(index + 1).padStart(2, "0")}`,
+        startMs,
+        endMs,
+        text,
+      }
+    })
+    .filter((cue): cue is VoiceSubtitleCue => Boolean(cue))
+
+  return cues.sort((left, right) => left.startMs - right.startMs)
+}
+
+function createFallbackSubtitleCues(
+  lines: string[],
+  durationPreset: VideoDurationPreset,
+  speechRateCharsPerSecond?: number
+) {
+  const presetMs = durationMsByPreset[durationPreset] || 60000
+  const rate =
+    typeof speechRateCharsPerSecond === "number" &&
+    Number.isFinite(speechRateCharsPerSecond) &&
+    speechRateCharsPerSecond > 0
+      ? speechRateCharsPerSecond
+      : undefined
+  const totalChars = lines.reduce((sum, text) => sum + cueCharLength(text), 0)
+  const speechMs = rate ? Math.round((totalChars / rate) * 1000) : presetMs
+  const totalMs = Math.max(1, Math.min(presetMs, speechMs))
+  let cursorMs = 0
+
+  return lines.map((text, index) => {
+    const isLast = index === lines.length - 1
+    const durationMs = isLast
+      ? totalMs - cursorMs
+      : Math.max(1, Math.round((cueCharLength(text) / totalChars) * totalMs))
+    const startMs = cursorMs
+    const endMs = isLast ? totalMs : Math.min(totalMs, cursorMs + durationMs)
+    cursorMs = endMs
+
+    return {
+      id: `subtitle_${String(index + 1).padStart(2, "0")}`,
+      startMs,
+      endMs,
+      text,
+    }
+  })
+}
+
+function findPreviousVisualAssetId(
+  shotId: string,
+  previousTimeline?: VideoTimeline
+) {
+  return previousTimeline?.tracks
+    .find((track) => track.id === "visual")
+    ?.clips.find((clip) => clip.id === `${shotId}_visual`)?.assetId
+}
+
 function resolveVisualAssetId(
   shot: TimelineStoryboardInput,
-  externalAssets: Pick<VideoAsset, "id" | "tags">[]
+  externalAssets: Pick<VideoAsset, "id" | "tags">[],
+  previousTimeline?: VideoTimeline
 ) {
+  const previousAssetId = findPreviousVisualAssetId(shot.id, previousTimeline)
+  if (shot.lockedAssetId) return previousAssetId || shot.lockedAssetId
+  if (shot.assetSelection === "manual" && !shot.replaceAsset) {
+    return previousAssetId || shot.assetIds[0] || shot.id
+  }
   if (shot.assetIds.length) return shot.assetIds[0]
   if (!shot.requiredMaterialLabel) return shot.id
 
@@ -105,19 +196,23 @@ export function createVoicePlanFromScript({
   script,
   durationPreset,
   audioFilename = "voice.wav",
+  ttsCues,
+  speechRateCharsPerSecond,
 }: CreateVoicePlanFromScriptInput): VoicePlan {
   const lines = splitScript(script)
-  const totalMs = durationMsByPreset[durationPreset] || 60000
-  const stepMs = Math.floor(totalMs / lines.length)
-  const subtitles: VoiceSubtitleCue[] = lines.map((text, index) => ({
-    id: `subtitle_${String(index + 1).padStart(2, "0")}`,
-    startMs: index * stepMs,
-    endMs: index === lines.length - 1 ? totalMs : (index + 1) * stepMs,
-    text,
-  }))
+  const ttsSubtitles = createSubtitleCuesFromTts(ttsCues)
+  const subtitles: VoiceSubtitleCue[] = ttsSubtitles.length
+    ? ttsSubtitles
+    : createFallbackSubtitleCues(
+        lines,
+        durationPreset,
+        speechRateCharsPerSecond
+      )
 
   return {
-    text: lines.join("\n"),
+    text: ttsSubtitles.length
+      ? ttsSubtitles.map((cue) => cue.text).join("\n")
+      : lines.join("\n"),
     audio: createVoiceFileRef(taskId, audioFilename),
     subtitles,
   }
@@ -130,6 +225,7 @@ export function createUnifiedVideoTimeline({
   externalAssets = [],
   bgmAssetId,
   sfxAssetIds = [],
+  previousTimeline,
 }: CreateUnifiedVideoTimelineInput): VideoTimeline {
   const durationMs = Math.max(
     ...voice.subtitles.map((cue) => cue.endMs),
@@ -142,7 +238,7 @@ export function createUnifiedVideoTimeline({
       type: "visual",
       clips: storyboard.map((shot) => ({
         id: `${shot.id}_visual`,
-        assetId: resolveVisualAssetId(shot, externalAssets),
+        assetId: resolveVisualAssetId(shot, externalAssets, previousTimeline),
         startMs: shot.startMs,
         durationMs: Math.max(0, shot.endMs - shot.startMs),
       })),
