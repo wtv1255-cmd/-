@@ -48,3 +48,18 @@
 - Decision debt:
   - Production provider failover and installed post-activation clickthrough still require a valid production `video_factory` license, real API credentials/provider control, and desktop control.
 - Human-required blockers: none for FOLLOW-06/REVIEW-04; production license/API credentials/desktop control remain limited validation for installed/provider E2E and cannot be used as proof of those paths.
+
+## REVIEW-04
+- Source doc: docs/superpowers/specs/2026-06-18-ta-huo-video-factory-phase2-design.md
+- Review agent: same-model sub-agent `Tesla` (`019eda78-d849-7311-85e4-789171ea782b`)
+- Scope checked: final claim/evidence alignment after FOLLOW-06, API failover runtime scope, historical CSV supersession notes, AI director wording, limited validation honesty, and all prior non-review row closure.
+- Evidence checked: commits `8d842ae`, `a3dd3de`, `8b35fbb`, `1613614`; current CSV; review log; `docs/video-factory-phase2-user-manual.md`; `docs/video-factory-phase2-validation-evidence.md`; `app/video/page.tsx`; `lib/api-profiles.ts`; `lib/video-task.ts`; `tests/api-profiles.test.mjs`; `tests/video-task.test.mjs`; `tests/video-factory-modules.test.mjs`; `node --test tests/api-profiles.test.mjs tests/video-task.test.mjs tests/video-factory-modules.test.mjs`; `pnpm tsc --noEmit`; targeted scope checks.
+- Claim/evidence alignment: matched
+- Limited validation honestly reported: yes
+- Result: vision_met
+- Gaps: none
+- Follow-up issues added: none
+- Assumptions:
+  - Production provider failover and installed post-activation clickthrough remain manual QA until valid production license, real API credentials/provider control, and desktop control are available.
+- Decision debt: none blocking current CSV closure.
+- Human-required blockers: production `video_factory` license, real API credentials/provider control, and desktop control remain external/manual validation items, but they are honestly recorded and do not block current CSV closure.
