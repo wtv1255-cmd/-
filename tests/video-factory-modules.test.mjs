@@ -39,3 +39,17 @@ test("video factory uses seven top modules instead of one long wall", async () =
   assert.match(source, /activeModule === "draft"/)
   assert.match(source, /activeModule === "settings"/)
 })
+
+test("script module exposes workflow modes passthrough and advanced rewrite channels", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /全自动/)
+  assert.match(source, /半自动/)
+  assert.match(source, /原文直通/)
+  assert.match(source, /显示高级改写/)
+  assert.match(source, /SCRIPT_REWRITE_MODE_OPTIONS\.filter/)
+  assert.match(source, /option\.label/)
+  assert.match(source, /option\.description/)
+  assert.match(source, /onUsePastedScript/)
+  assert.match(source, /onSaveWorkflowSettings/)
+})

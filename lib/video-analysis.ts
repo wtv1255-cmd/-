@@ -34,10 +34,36 @@ export type VideoAnalysisDraft = {
   failureReason?: string
 }
 
+export type ScriptRewriteMode =
+  | "original"
+  | "rewrite_a"
+  | "rewrite_b"
+  | "rewrite_c"
+
+export type ScriptWorkflowMode = "semi_auto" | "full_auto"
+
+export type ScriptRewriteModeOption = {
+  id: ScriptRewriteMode
+  label: string
+  description: string
+  advancedOnly: boolean
+}
+
+export type ScriptWorkflowSettings = {
+  version: 1
+  fullAutoRewriteMode: ScriptRewriteMode
+}
+
 export type CreateManualVideoAnalysisDraftInput = {
   topic: string
   packageId: VideoPackageId
   durationPreset: VideoDurationPreset
+}
+
+export type CreatePastedScriptDraftInput = {
+  script: string
+  rewriteMode?: ScriptRewriteMode
+  sourceLabel?: string
 }
 
 export type ScriptGenerationRequest = {
@@ -54,6 +80,7 @@ export type BuildScriptGenerationRequestInput = {
   sourceText: string
   durationPreset: VideoDurationPreset
   packageId: VideoPackageId
+  rewriteMode?: ScriptRewriteMode
   model?: string
 }
 
@@ -84,6 +111,93 @@ const structureLabels = [
   ["conversion", "转化口播"],
   ["close", "结尾行动"],
 ] as const
+
+export const SCRIPT_WORKFLOW_SETTINGS_STORAGE_KEY =
+  "ta-huo:video-script-workflow:v1"
+
+export const SCRIPT_REWRITE_MODE_OPTIONS: ScriptRewriteModeOption[] = [
+  {
+    id: "original",
+    label: "原文直通",
+    description: "不调用文本模型，直接用粘贴脚本进入分镜、配音和草稿。",
+    advancedOnly: false,
+  },
+  {
+    id: "rewrite_a",
+    label: "A 轻改写",
+    description: "保留原脚本顺序，只替换表达和口播细节。",
+    advancedOnly: true,
+  },
+  {
+    id: "rewrite_b",
+    label: "B 平衡改写",
+    description: "保留爆款结构，重写钩子、证明和转化表达。",
+    advancedOnly: true,
+  },
+  {
+    id: "rewrite_c",
+    label: "C 强重构",
+    description: "只保留核心意图，重排节奏并生成新的原创脚本。",
+    advancedOnly: true,
+  },
+]
+
+const rewriteInstructions: Record<Exclude<ScriptRewriteMode, "original">, string> = {
+  rewrite_a:
+    "A 档轻改写：保留原脚本段落顺序和卖点，只替换措辞、节奏连接和口播细节，降低搬运感。",
+  rewrite_b:
+    "B 档平衡改写：保留可复用爆款结构，重写三秒钩子、痛点证明和转化表达，默认用于全自动流程。",
+  rewrite_c:
+    "C 档强重构：只保留核心意图和目标用户，重新组织开头、演示、证明和转化顺序，生成新的原创脚本。",
+}
+
+function isScriptRewriteMode(value: unknown): value is ScriptRewriteMode {
+  return SCRIPT_REWRITE_MODE_OPTIONS.some((option) => option.id === value)
+}
+
+export function createDefaultScriptWorkflowSettings(): ScriptWorkflowSettings {
+  return {
+    version: 1,
+    fullAutoRewriteMode: "rewrite_b",
+  }
+}
+
+export function normalizeScriptWorkflowSettings(
+  value: unknown
+): ScriptWorkflowSettings {
+  const defaults = createDefaultScriptWorkflowSettings()
+  if (!value || typeof value !== "object") return defaults
+
+  const raw = value as Partial<ScriptWorkflowSettings>
+  return {
+    version: 1,
+    fullAutoRewriteMode: isScriptRewriteMode(raw.fullAutoRewriteMode)
+      ? raw.fullAutoRewriteMode
+      : defaults.fullAutoRewriteMode,
+  }
+}
+
+export function shouldRequestTextModelForScriptMode(mode: ScriptRewriteMode) {
+  return mode !== "original"
+}
+
+export function saveScriptWorkflowSettings(
+  settings: ScriptWorkflowSettings,
+  storage: Storage = window.localStorage
+) {
+  storage.setItem(
+    SCRIPT_WORKFLOW_SETTINGS_STORAGE_KEY,
+    JSON.stringify(normalizeScriptWorkflowSettings(settings))
+  )
+}
+
+export function readScriptWorkflowSettings(
+  storage: Storage = window.localStorage
+) {
+  const raw = storage.getItem(SCRIPT_WORKFLOW_SETTINGS_STORAGE_KEY)
+  if (!raw) return createDefaultScriptWorkflowSettings()
+  return normalizeScriptWorkflowSettings(JSON.parse(raw))
+}
 
 function cleanText(value: unknown, fallback = "") {
   const text =
@@ -297,14 +411,33 @@ export function createManualVideoAnalysisDraft({
   }
 }
 
+export function createPastedScriptDraft({
+  script,
+  sourceLabel = "用户粘贴脚本",
+}: CreatePastedScriptDraftInput): VideoAnalysisDraft {
+  const originalScript = cleanScriptText(script, "请粘贴完整脚本。")
+  const sourceText = cleanText(sourceLabel, "用户粘贴脚本")
+  return {
+    status: "ready_for_edit",
+    editable: true,
+    sourceText,
+    structureSummary: buildStructureSummaryFromScript(sourceText, originalScript),
+    sentenceTimeline: buildSentenceTimeline(originalScript),
+    originalScript,
+  }
+}
+
 export function buildScriptGenerationRequest({
   profile,
   sourceText,
   durationPreset,
   packageId,
+  rewriteMode = "rewrite_b",
   model = profile.model,
 }: BuildScriptGenerationRequestInput): ScriptGenerationRequest {
   const cleanedSource = cleanText(sourceText, "无转写内容，按用户主题生成")
+  const rewriteInstruction =
+    rewriteMode === "original" ? rewriteInstructions.rewrite_b : rewriteInstructions[rewriteMode]
   return {
     model: model.trim() || "claude-opus-4-6-thinking",
     messages: [
@@ -319,6 +452,7 @@ export function buildScriptGenerationRequest({
           "请基于以下来源生成原创短视频脚本。",
           `套餐：${packageLabel(packageId)}`,
           `目标时长：${durationPreset}`,
+          `改写模式：${rewriteInstruction}`,
           "不要直接复述来源文案，要先提炼结构，再改成一条新的火柴人爆款口播。",
           "严格按以下格式输出，字段名不要改：",
           "结构摘要：",

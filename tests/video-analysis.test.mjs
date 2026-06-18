@@ -125,6 +125,70 @@ test("structured model response separates analysis from original script", async 
   ])
 })
 
+test("pasted script passthrough creates draft without a text model request", async () => {
+  const {
+    createPastedScriptDraft,
+    shouldRequestTextModelForScriptMode,
+  } = await importVideoAnalysisModule()
+  const script = "开头：别再熬夜剪片。\n演示：把脚本粘进她火，直接生成分镜。\n转化：收藏这个流程。"
+  const draft = createPastedScriptDraft({
+    script,
+    rewriteMode: "original",
+    sourceLabel: "用户粘贴脚本",
+  })
+
+  assert.equal(shouldRequestTextModelForScriptMode("original"), false)
+  assert.equal(draft.status, "ready_for_edit")
+  assert.equal(draft.editable, true)
+  assert.equal(draft.sourceText, "用户粘贴脚本")
+  assert.equal(draft.originalScript, script)
+  assert.match(draft.structureSummary.hook, /别再熬夜/)
+  assert.equal(draft.sentenceTimeline.length, 3)
+})
+
+test("rewrite strengths expose A B C channels with B as full auto default", async () => {
+  const {
+    SCRIPT_REWRITE_MODE_OPTIONS,
+    buildScriptGenerationRequest,
+    createDefaultScriptWorkflowSettings,
+    normalizeScriptWorkflowSettings,
+    shouldRequestTextModelForScriptMode,
+  } = await importVideoAnalysisModule()
+
+  assert.deepEqual(
+    SCRIPT_REWRITE_MODE_OPTIONS.map((option) => option.id),
+    ["original", "rewrite_a", "rewrite_b", "rewrite_c"]
+  )
+  assert.equal(createDefaultScriptWorkflowSettings().fullAutoRewriteMode, "rewrite_b")
+  assert.equal(
+    normalizeScriptWorkflowSettings({ fullAutoRewriteMode: "rewrite_c" })
+      .fullAutoRewriteMode,
+    "rewrite_c"
+  )
+  assert.equal(shouldRequestTextModelForScriptMode("rewrite_a"), true)
+  assert.equal(shouldRequestTextModelForScriptMode("rewrite_b"), true)
+  assert.equal(shouldRequestTextModelForScriptMode("rewrite_c"), true)
+
+  const request = buildScriptGenerationRequest({
+    profile: {
+      service: "text_model",
+      profileId: "text-main",
+      apiBaseUrl: "https://text.example.com/v1",
+      model: "claude-opus-4-6-thinking",
+      apiKey: "fixture_text_secret",
+    },
+    sourceText: "开头：别再熬夜剪片。\n演示：把脚本粘进她火，直接生成分镜。",
+    durationPreset: "45-60s",
+    packageId: "stickman_meme",
+    rewriteMode: "rewrite_c",
+  })
+
+  const prompt = JSON.stringify(request.messages)
+  assert.match(prompt, /C 档/)
+  assert.match(prompt, /强重构/)
+  assert.match(prompt, /不要直接复述来源文案/)
+})
+
 test("model failure returns manual edit fallback without blocking workflow", async () => {
   const { createScriptGenerationFailureDraft } = await importVideoAnalysisModule()
   const draft = createScriptGenerationFailureDraft({

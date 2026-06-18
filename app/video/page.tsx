@@ -80,10 +80,19 @@ import {
   runStickmanImageGenerationQueue,
 } from "@/lib/video-assets"
 import {
+  SCRIPT_REWRITE_MODE_OPTIONS,
   buildScriptGenerationRequest,
+  createDefaultScriptWorkflowSettings,
   createModelVideoAnalysisDraft,
+  createPastedScriptDraft,
   createScriptGenerationFailureDraft,
   createScriptGenerationLogEntry,
+  readScriptWorkflowSettings,
+  saveScriptWorkflowSettings,
+  shouldRequestTextModelForScriptMode,
+  type ScriptRewriteMode,
+  type ScriptWorkflowMode,
+  type ScriptWorkflowSettings,
   type VideoAnalysisDraft,
 } from "@/lib/video-analysis"
 import {
@@ -195,6 +204,13 @@ function VideoFactoryShell() {
   const [analysisDraft, setAnalysisDraft] = useState<VideoAnalysisDraft | null>(
     null
   )
+  const [scriptWorkflowMode, setScriptWorkflowMode] =
+    useState<ScriptWorkflowMode>("semi_auto")
+  const [scriptRewriteMode, setScriptRewriteMode] =
+    useState<ScriptRewriteMode>("rewrite_b")
+  const [showAdvancedRewrite, setShowAdvancedRewrite] = useState(false)
+  const [scriptWorkflowSettings, setScriptWorkflowSettings] =
+    useState<ScriptWorkflowSettings>(createDefaultScriptWorkflowSettings)
   const [isGeneratingAnalysis, setIsGeneratingAnalysis] = useState(false)
   const [selectedPackages, setSelectedPackages] = useState<VideoPackageId[]>([
     "stickman_meme",
@@ -242,11 +258,17 @@ function VideoFactoryShell() {
         setActiveTaskId(restoredTasks[0]?.id || "")
         setApiProfiles(readApiProfileStore())
         setTtsSettings(readVideoTtsSettings())
+        const restoredScriptSettings = readScriptWorkflowSettings()
+        setScriptWorkflowSettings(restoredScriptSettings)
+        setScriptRewriteMode(restoredScriptSettings.fullAutoRewriteMode)
       } catch {
         setPublishDraft(null)
         setTasks([])
         setActiveTaskId("")
         setApiProfiles(createDefaultApiProfileStore())
+        const defaults = createDefaultScriptWorkflowSettings()
+        setScriptWorkflowSettings(defaults)
+        setScriptRewriteMode(defaults.fullAutoRewriteMode)
       }
     })
     return () => {
@@ -341,6 +363,19 @@ function VideoFactoryShell() {
     saveVideoTtsSettings(settings)
     setTtsStatus("本地 TTS 配置已保存")
     setToast("TTS 路径配置已保存")
+  }
+
+  const saveScriptWorkflowPreference = (mode: ScriptRewriteMode) => {
+    const nextSettings: ScriptWorkflowSettings = {
+      ...scriptWorkflowSettings,
+      fullAutoRewriteMode: mode,
+    }
+    setScriptWorkflowSettings(nextSettings)
+    saveScriptWorkflowSettings(nextSettings)
+    if (scriptWorkflowMode === "full_auto") {
+      setScriptRewriteMode(mode)
+    }
+    setToast("全自动改写偏好已保存")
   }
 
   const checkTtsSettings = async (settings = ttsSettings) => {
@@ -573,12 +608,56 @@ function VideoFactoryShell() {
     setLocalUploadName("")
   }
 
+  const applyScriptDraft = (draft: VideoAnalysisDraft, message: string) => {
+    setAnalysisDraft(draft)
+    updateActiveTaskSnapshot((snapshot) => ({
+      ...snapshot,
+      source: {
+        ...snapshot.source,
+        mode: "manual_text",
+        userTopic: analysisTopic,
+      },
+      voice: {
+        ...snapshot.voice,
+        text: draft.originalScript,
+      },
+      records: [
+        ...snapshot.records,
+        {
+          id: `script_${Date.now()}`,
+          at: new Date().toISOString(),
+          kind: "script_analysis",
+          message,
+        },
+      ],
+    }))
+  }
+
+  const applyPastedScript = () => {
+    const draft = createPastedScriptDraft({
+      script: analysisTopic,
+      rewriteMode: "original",
+      sourceLabel: "用户粘贴脚本",
+    })
+    applyScriptDraft(draft, `原文直通：${draft.sentenceTimeline.length} 句`)
+    setToast("已直通粘贴脚本，可继续分镜")
+  }
+
   const generateAnalysisDraft = async () => {
+    const effectiveRewriteMode =
+      scriptWorkflowMode === "full_auto"
+        ? scriptWorkflowSettings.fullAutoRewriteMode
+        : scriptRewriteMode
+    if (!shouldRequestTextModelForScriptMode(effectiveRewriteMode)) {
+      applyPastedScript()
+      return
+    }
     const request = buildScriptGenerationRequest({
       profile: buildApiProfileRequestContext(apiProfiles, "text_model"),
       sourceText: analysisTopic,
       durationPreset: "45-60s",
       packageId: "stickman_meme",
+      rewriteMode: effectiveRewriteMode,
     })
     const logEntry = createScriptGenerationLogEntry(request)
     let draft: VideoAnalysisDraft
@@ -630,23 +709,10 @@ function VideoFactoryShell() {
       setIsGeneratingAnalysis(false)
     }
 
-    setAnalysisDraft(draft)
-    updateActiveTaskSnapshot((snapshot) => ({
-      ...snapshot,
-      voice: {
-        ...snapshot.voice,
-        text: draft.originalScript,
-      },
-      records: [
-        ...snapshot.records,
-        {
-          id: `script_${Date.now()}`,
-          at: new Date().toISOString(),
-          kind: "script_analysis",
-          message: `脚本分析：${draft.status} · ${logEntry.profileId} · ${logEntry.sourceLength} 字符`,
-        },
-      ],
-    }))
+    applyScriptDraft(
+      draft,
+      `脚本分析：${draft.status} · ${effectiveRewriteMode} · ${logEntry.profileId} · ${logEntry.sourceLength} 字符`
+    )
     setToast(
       draft.status === "ready_for_edit"
         ? "已调用文本模型生成原创脚本"
@@ -1289,7 +1355,18 @@ function VideoFactoryShell() {
                 topic={analysisTopic}
                 draft={analysisDraft}
                 generating={isGeneratingAnalysis}
+                workflowMode={scriptWorkflowMode}
+                rewriteMode={scriptRewriteMode}
+                fullAutoRewriteMode={
+                  scriptWorkflowSettings.fullAutoRewriteMode
+                }
+                showAdvancedRewrite={showAdvancedRewrite}
                 onTopicChange={setAnalysisTopic}
+                onWorkflowModeChange={setScriptWorkflowMode}
+                onRewriteModeChange={setScriptRewriteMode}
+                onSaveWorkflowSettings={saveScriptWorkflowPreference}
+                onShowAdvancedRewriteChange={setShowAdvancedRewrite}
+                onUsePastedScript={applyPastedScript}
                 onGenerateDraft={generateAnalysisDraft}
                 onScriptChange={(value) => {
                   setAnalysisDraft((current) =>
@@ -1766,17 +1843,42 @@ function ScriptAnalysisPanel({
   topic,
   draft,
   generating,
+  workflowMode,
+  rewriteMode,
+  fullAutoRewriteMode,
+  showAdvancedRewrite,
   onTopicChange,
+  onWorkflowModeChange,
+  onRewriteModeChange,
+  onSaveWorkflowSettings,
+  onShowAdvancedRewriteChange,
+  onUsePastedScript,
   onGenerateDraft,
   onScriptChange,
 }: {
   topic: string
   draft: VideoAnalysisDraft | null
   generating: boolean
+  workflowMode: ScriptWorkflowMode
+  rewriteMode: ScriptRewriteMode
+  fullAutoRewriteMode: ScriptRewriteMode
+  showAdvancedRewrite: boolean
   onTopicChange: (value: string) => void
+  onWorkflowModeChange: (value: ScriptWorkflowMode) => void
+  onRewriteModeChange: (value: ScriptRewriteMode) => void
+  onSaveWorkflowSettings: (value: ScriptRewriteMode) => void
+  onShowAdvancedRewriteChange: (value: boolean) => void
+  onUsePastedScript: () => void
   onGenerateDraft: () => void
   onScriptChange: (value: string) => void
 }) {
+  const visibleRewriteOptions = SCRIPT_REWRITE_MODE_OPTIONS.filter(
+    (option) => !option.advancedOnly || showAdvancedRewrite
+  )
+  const activeFullAutoOption =
+    SCRIPT_REWRITE_MODE_OPTIONS.find((option) => option.id === fullAutoRewriteMode) ||
+    SCRIPT_REWRITE_MODE_OPTIONS[2]
+
   return (
     <section className="rounded-lg border bg-background p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1790,9 +1892,81 @@ function ScriptAnalysisPanel({
       </div>
 
       <div className="grid gap-4">
+        <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex rounded-lg border bg-background p-1">
+              {(
+                [
+                  ["semi_auto", "半自动"],
+                  ["full_auto", "全自动"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`h-8 rounded-md px-3 text-sm transition ${
+                    workflowMode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                  onClick={() => onWorkflowModeChange(mode)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showAdvancedRewrite}
+                onChange={(event) =>
+                  onShowAdvancedRewriteChange(event.target.checked)
+                }
+              />
+              显示高级改写
+            </label>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2 max-lg:grid-cols-2 max-sm:grid-cols-1">
+            {visibleRewriteOptions.map((option) => {
+              const active = rewriteMode === option.id
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`rounded-lg border p-3 text-left transition ${
+                    active
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "bg-background hover:bg-muted"
+                  }`}
+                  onClick={() => onRewriteModeChange(option.id)}
+                >
+                  <div className="text-sm font-medium">{option.label}</div>
+                  <div className="mt-1 text-xs leading-5 opacity-80">
+                    {option.description}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>全自动默认：{activeFullAutoOption.label}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSaveWorkflowSettings(rewriteMode)}
+            >
+              <Save className="size-4" />
+              保存全自动偏好
+            </Button>
+          </div>
+        </div>
+
         <label className="grid gap-2">
           <span className="text-xs font-medium text-muted-foreground">
-            来源转写或手动主题
+            来源转写、手动主题或完整脚本
           </span>
           <textarea
             value={topic}
@@ -1802,12 +1976,20 @@ function ScriptAnalysisPanel({
         </label>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" disabled={generating} onClick={onUsePastedScript}>
+            <FileVideo className="size-4" />
+            原文直通
+          </Button>
           <Button disabled={generating} onClick={onGenerateDraft}>
             <Sparkles className="size-4" />
-            {generating ? "生成中" : "生成结构和脚本"}
+            {generating
+              ? "生成中"
+              : workflowMode === "full_auto"
+                ? "全自动生成"
+                : "生成结构和脚本"}
           </Button>
           <span className="text-xs text-muted-foreground">
-            使用当前文本模型 Profile；失败会保留手动编辑入口。
+            原文直通不会调用文本模型；改写模式使用当前文本模型 Profile。
           </span>
         </div>
 
