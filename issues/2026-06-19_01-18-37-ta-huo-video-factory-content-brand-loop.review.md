@@ -1,0 +1,15 @@
+## REVIEW-01
+- Source doc: C:/Users/Administrator/.codex/memories/ta-huo-video-factory-content-brand-loop-2026-06-19.md
+- Review agent: same-model sub-agent
+- Scope checked: template selector, product-board-only terms/icons/overlays, non-product cleanliness, no-logo image prompts, brand sticker draft handoff, product-board draft validation, installer hash, no-push/no-secret status
+- Evidence checked: commits 8d5ac05..867cd5d, current CSV states, docs, shared memory, focused Node tests, TypeScript/build/desktop build evidence, Playwright UI checks, installer metadata
+- Claim/evidence alignment: matched after evidence-record wording fix
+- Limited validation honestly reported: yes
+- Result: vision_met
+- Resolved gaps:
+  - Low: CSV notes cite Playwright screenshot filenames `brand03-product-board.png`, `brand05-asset-labels.png`, `brand08-product-board.png`, and `brand08-brand-sticker-assets.png`, but those files were not found in the repository or `C:\th2`. The functional UI/source/test evidence exists, but the screenshot artifact names are not auditable from the local files currently available.
+- Resolution: CSV evidence wording was downgraded from named screenshot files to Playwright interaction/snapshot evidence, because the screenshot files were not retained. No functional code changed.
+- Follow-up issues added: none; evidence-record wording fixed in place
+- Assumptions: existing Playwright snapshots and source/contract tests are enough to support behavior claims, but not the named screenshot artifact claims
+- Decision debt: none
+- Human-required blockers: none
