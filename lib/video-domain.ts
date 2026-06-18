@@ -24,6 +24,7 @@ export type VideoAssetKind =
   | "subtitle_file"
   | "bgm"
   | "sfx"
+  | "jianying_draft"
   | "rendered_video"
 
 export type VideoVisualType =

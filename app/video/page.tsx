@@ -126,11 +126,11 @@ import {
   type VideoTtsSettings,
 } from "@/lib/video-tts"
 import {
+  createJianyingDraftPlan,
   createRenderEngineOptions,
-  createRenderExportPlan,
+  type JianyingDraftPlan,
   type RenderEngineId,
   type RenderEngineOption,
-  type RenderExportPlan,
 } from "@/lib/video-rendering"
 import {
   collectViralSourceCandidates,
@@ -289,7 +289,7 @@ function VideoFactoryShell() {
       davinciAvailable: false,
     })
   )
-  const [renderPlan, setRenderPlan] = useState<RenderExportPlan | null>(null)
+  const [draftPlan, setDraftPlan] = useState<JianyingDraftPlan | null>(null)
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -343,7 +343,7 @@ function VideoFactoryShell() {
         setStickmanProgress("")
         setVoicePlan(null)
         setVideoTimeline(null)
-        setRenderPlan(null)
+        setDraftPlan(null)
         return
       }
       const snapshot = readVideoTaskSnapshot(activeTask.id)
@@ -365,22 +365,24 @@ function VideoFactoryShell() {
       setVideoTimeline(
         snapshot?.timeline.tracks.length ? snapshot.timeline : null
       )
-      const renderedAsset = snapshot?.assets.find(
+      const restoredDraftAsset = snapshot?.assets.find(
         (asset) =>
-          asset.kind === "rendered_video" &&
-          asset.tags?.includes("render_export_plan")
+          asset.kind === "jianying_draft" &&
+          asset.tags?.includes("editable_draft_plan")
       )
-      setRenderPlan(
-        renderedAsset
+      setDraftPlan(
+        restoredDraftAsset
           ? {
               taskId: activeTask.id,
-              engineId: null,
-              requestedEngineId: requestedRenderEngine,
-              status: "ready",
-              output: renderedAsset,
-              previewPath: renderedAsset.file.path,
+              status: "created",
+              defaultOutputKind: "jianying_draft",
+              mp4ExportDefault: false,
+              output: restoredDraftAsset,
+              previewPath: restoredDraftAsset.file.path,
               command: "",
-              message: "已恢复上次导出计划。",
+              message: "已恢复上次剪映草稿计划。",
+              aiDirector: { trackOrder: [], clips: [] },
+              requiredConfirmations: [],
             }
           : null
       )
@@ -388,7 +390,7 @@ function VideoFactoryShell() {
     return () => {
       alive = false
     }
-  }, [activeTask?.id, activeTask?.title, requestedRenderEngine])
+  }, [activeTask?.id, activeTask?.title])
 
   const persistTasks = (nextTasks: VideoTask[], nextActiveId?: string) => {
     setTasks(nextTasks)
@@ -1312,86 +1314,74 @@ function VideoFactoryShell() {
       return
     }
 
-    const plan = createRenderExportPlan({
+    const plan = createJianyingDraftPlan({
       taskId: activeTask.id,
       timeline: videoTimeline,
-      requestedEngineId: requestedRenderEngine,
-      engines: renderEngines,
     })
-    const withoutPreviousRenderPlan = (assets: VideoAsset[]) =>
-      assets.filter((asset) => !asset.tags?.includes("render_export_plan"))
-    const desktopRenderer = window.promptCenterDesktop?.renderVideoWithFfmpeg
-    const canUseBuiltInExport =
-      plan.engineId === "ffmpeg" &&
-      (plan.status === "ready" || plan.status === "fallback_ready") &&
-      Boolean(desktopRenderer)
-    const renderResult = canUseBuiltInExport
-      ? await desktopRenderer?.({
-          taskId: activeTask.id,
-          timeline: videoTimeline,
-          outputFilename: plan.output.file.filename,
-        })
-      : null
-    const renderedOutput =
-      renderResult?.ok && renderResult.filePath
+    const withoutPreviousDraftPlan = (assets: VideoAsset[]) =>
+      assets.filter((asset) => !asset.tags?.includes("editable_draft_plan"))
+    const desktopDraft = window.promptCenterDesktop?.createJianyingDraft
+    const draftResult =
+      plan.status === "ready" && desktopDraft
+        ? await desktopDraft({ plan })
+        : null
+    const draftOutput =
+      draftResult?.ok && draftResult.draftPath
         ? {
             ...plan.output,
             file: {
               ...plan.output.file,
-              filename: renderResult.filename || plan.output.file.filename,
-              path: renderResult.filePath,
-              bytes: renderResult.bytes || 0,
-              mimeType: renderResult.mimeType || "video/mp4",
+              path: draftResult.draftPath,
+              bytes: draftResult.bytes || 0,
             },
           }
         : plan.output
-    const nextPlan: RenderExportPlan = {
+    const nextPlan: JianyingDraftPlan = {
       ...plan,
-      output: renderedOutput,
-      previewPath: renderedOutput.file.path,
-      status: renderResult?.ok ? "exported" : plan.status,
-      message: renderResult?.ok
-        ? `FFmpeg 已导出真实 MP4：${renderedOutput.file.filename}`
-        : renderResult?.error
-          ? `FFmpeg 导出失败：${renderResult.error}`
-          : desktopRenderer
+      output: draftOutput,
+      previewPath: draftOutput.file.path,
+      status: draftResult?.ok ? "created" : plan.status,
+      message: draftResult?.ok
+        ? `剪映草稿包已创建：${draftOutput.file.path}`
+        : draftResult?.error
+          ? `剪映草稿创建失败：${draftResult.error}`
+          : desktopDraft
             ? plan.message
-            : `${plan.message} 当前浏览器环境仅生成导出计划，桌面端会执行 FFmpeg。`,
+            : `${plan.message} 当前浏览器环境仅生成草稿计划，桌面端会创建草稿包。`,
     }
     const isUsablePlan =
       nextPlan.status === "ready" ||
-      nextPlan.status === "fallback_ready" ||
-      nextPlan.status === "exported"
-    setRenderPlan(nextPlan)
+      nextPlan.status === "created"
+    setDraftPlan(nextPlan)
 
     if (isUsablePlan) {
       setVideoAssets((current) => [
         nextPlan.output,
-        ...withoutPreviousRenderPlan(current),
+        ...withoutPreviousDraftPlan(current),
       ])
     }
 
     updateActiveTaskSnapshot((snapshot) => ({
       ...snapshot,
       assets: isUsablePlan
-        ? [nextPlan.output, ...withoutPreviousRenderPlan(snapshot.assets)]
+        ? [nextPlan.output, ...withoutPreviousDraftPlan(snapshot.assets)]
         : snapshot.assets,
       records: [
         ...snapshot.records,
         {
-          id: `render_${Date.now()}`,
+          id: `jianying_draft_${Date.now()}`,
           at: new Date().toISOString(),
-          kind: "render_export_plan",
+          kind: "jianying_draft_plan",
           message: `${nextPlan.message} 输出引用：${nextPlan.previewPath}`,
         },
       ],
     }))
     setToast(
-      renderResult?.ok
-        ? "已导出真实 MP4"
+      draftResult?.ok
+        ? "已创建剪映草稿包"
         : isUsablePlan
-          ? "已生成导出计划和预览路径"
-          : "当前没有可用渲染引擎"
+          ? "已生成剪映草稿计划"
+          : "当前无法创建剪映草稿"
     )
   }
 
@@ -1658,7 +1648,7 @@ function VideoFactoryShell() {
                 <RenderExportPanel
                   engines={renderEngines}
                   requestedEngine={requestedRenderEngine}
-                  plan={renderPlan}
+                  plan={draftPlan}
                   hasTimeline={Boolean(videoTimeline?.tracks.length)}
                   onEngineChange={setRequestedRenderEngine}
                   onPrepareExport={prepareRenderExport}
@@ -3145,7 +3135,7 @@ function RenderExportPanel({
 }: {
   engines: RenderEngineOption[]
   requestedEngine: RenderEngineId
-  plan: RenderExportPlan | null
+  plan: JianyingDraftPlan | null
   hasTimeline: boolean
   onEngineChange: (engine: RenderEngineId) => void
   onPrepareExport: () => void
@@ -3154,15 +3144,15 @@ function RenderExportPanel({
     <section className="rounded-lg border bg-background p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">剪辑预览和导出</h2>
+          <h2 className="text-lg font-semibold">剪映草稿</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            所有引擎都消费同一条 VideoTimeline；剪映不可用时可切到内置 FFmpeg
-            兜底，DaVinci 未检测到时保持禁用。
+            根据统一 VideoTimeline 创建可编辑剪映草稿和任务素材包；MP4
+            导出不是默认输出。
           </p>
         </div>
         <Button disabled={!hasTimeline} onClick={onPrepareExport}>
           <FileVideo className="size-4" />
-          准备导出
+          生成剪映草稿
         </Button>
       </div>
 
@@ -3203,7 +3193,7 @@ function RenderExportPanel({
 
         {!hasTimeline ? (
           <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
-            先生成统一时间线，再准备渲染导出计划。
+            先生成统一时间线，再创建剪映草稿。
           </div>
         ) : null}
 
@@ -3218,15 +3208,14 @@ function RenderExportPanel({
               <span className="min-w-0 truncate font-mono">
                 {plan.previewPath}
               </span>
-              <span className="text-muted-foreground">渲染命令</span>
+              <span className="text-muted-foreground">草稿命令</span>
               <span className="min-w-0 truncate font-mono">
-                {plan.command || "等待可用引擎"}
+                {plan.command || "等待剪映草稿计划"}
               </span>
             </div>
-            {plan.fallbackFrom ? (
+            {plan.requiredConfirmations.length ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-                已从 {plan.fallbackFrom} 自动切换到 {plan.engineId}
-                ；原引擎状态保留，任务素材和时间线未被改写。
+                需要确认：{plan.requiredConfirmations.join("、")}
               </div>
             ) : null}
           </div>

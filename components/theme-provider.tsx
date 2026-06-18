@@ -52,6 +52,15 @@ declare global {
         dataUrl?: string
         error?: string
       }>
+      createJianyingDraft?: (input: { plan: unknown }) => Promise<{
+        ok: boolean
+        taskId?: string
+        draftPath?: string
+        manifestPath?: string
+        contentPath?: string
+        bytes?: number
+        error?: string
+      }>
       renderVideoWithFfmpeg?: (input: {
         taskId: string
         timeline: unknown

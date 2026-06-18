@@ -16,6 +16,7 @@ import {
   createTaskAssetPreviewIpcHandler,
 } from "./task-file-store.mjs"
 import { createLocalTtsProjectIpcHandler } from "./local-tts-project.mjs"
+import { createJianyingDraftIpcHandler } from "./jianying-draft.mjs"
 import { createVideoRendererIpcHandler } from "./video-renderer.mjs"
 
 const PREFERRED_FRONTEND_PORT = 48218
@@ -193,6 +194,10 @@ ipcMain.handle("ta-huo:save-file-to-downloads", async (_event, input) => {
 ipcMain.handle(
   "ta-huo:render-video-with-ffmpeg",
   createVideoRendererIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:create-jianying-draft",
+  createJianyingDraftIpcHandler(app.getPath("userData"))
 )
 ipcMain.handle(
   "ta-huo:save-task-asset-file",

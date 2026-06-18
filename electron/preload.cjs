@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   readTaskAssetPreview(input) {
     return ipcRenderer.invoke("ta-huo:read-task-asset-preview", input)
   },
+  createJianyingDraft(input) {
+    return ipcRenderer.invoke("ta-huo:create-jianying-draft", input)
+  },
   renderVideoWithFfmpeg(input) {
     return ipcRenderer.invoke("ta-huo:render-video-with-ffmpeg", input)
   },

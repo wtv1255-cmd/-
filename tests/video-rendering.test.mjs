@@ -41,10 +41,28 @@ const readyTimeline = {
       type: "visual",
       clips: [
         {
-          id: "clip_01",
+          id: "shot_01_visual",
           assetId: "stickman_01",
           startMs: 0,
           durationMs: 15000,
+        },
+        {
+          id: "shot_02_visual",
+          assetId: "placeholder_opening_hook_shot_02",
+          startMs: 15000,
+          durationMs: 15000,
+        },
+      ],
+    },
+    {
+      id: "voice",
+      type: "voice",
+      clips: [
+        {
+          id: "voice_main",
+          assetId: "voice_audio_voice.wav",
+          startMs: 0,
+          durationMs: 45000,
         },
       ],
     },
@@ -63,6 +81,88 @@ const readyTimeline = {
     },
   ],
 }
+
+test("Jianying draft plan is the primary editable output instead of MP4 export", async () => {
+  const { createJianyingDraftPlan } = await importRenderingModule()
+  const plan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+  })
+
+  assert.equal(plan.status, "ready")
+  assert.equal(plan.defaultOutputKind, "jianying_draft")
+  assert.equal(plan.mp4ExportDefault, false)
+  assert.equal(plan.output.kind, "jianying_draft")
+  assert.equal(plan.output.file.mimeType, "application/vnd.jianying.draft+json")
+  assert.match(
+    plan.output.file.path,
+    /tasks\/task_01\/jianying_drafts\/task_01-20260618-090000$/
+  )
+  assert.doesNotMatch(plan.previewPath, /\.mp4$/)
+  assert.match(plan.command, /ta-huo-create-jianying-draft/)
+})
+
+test("AI director plan preserves locks and creates editable placeholders", async () => {
+  const { createJianyingDraftPlan } = await importRenderingModule()
+  const plan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+    lockedShotIds: ["shot_01"],
+    lockedTrackIds: ["voice"],
+  })
+  const lockedVisual = plan.aiDirector.clips.find(
+    (clip) => clip.id === "shot_01_visual"
+  )
+  const placeholderVisual = plan.aiDirector.clips.find(
+    (clip) => clip.id === "shot_02_visual"
+  )
+  const voiceClip = plan.aiDirector.clips.find(
+    (clip) => clip.id === "voice_main"
+  )
+  const subtitleClip = plan.aiDirector.clips.find(
+    (clip) => clip.id === "subtitle_01"
+  )
+
+  assert.equal(lockedVisual.locked, true)
+  assert.equal(lockedVisual.aiEditable, false)
+  assert.equal(lockedVisual.assetId, "stickman_01")
+  assert.equal(lockedVisual.transition, "locked")
+  assert.equal(placeholderVisual.placeholder, true)
+  assert.match(placeholderVisual.replacementHint, /剪映中替换/)
+  assert.equal(voiceClip.locked, true)
+  assert.equal(subtitleClip.emphasisSubtitle, true)
+  assert.deepEqual(plan.aiDirector.trackOrder, [
+    "visual",
+    "voice",
+    "subtitle",
+  ])
+})
+
+test("destructive Jianying draft actions require explicit confirmation", async () => {
+  const { createJianyingDraftPlan } = await importRenderingModule()
+  const plan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+    requestedActions: [
+      "overwrite_existing_draft",
+      "delete_old_materials",
+      "publish_or_upload",
+      "replace_manual_edits",
+    ],
+    confirmedActions: ["publish_or_upload"],
+  })
+
+  assert.equal(plan.status, "needs_confirmation")
+  assert.deepEqual(plan.requiredConfirmations, [
+    "overwrite_existing_draft",
+    "delete_old_materials",
+    "replace_manual_edits",
+  ])
+  assert.match(plan.message, /需要用户确认/)
+})
 
 test("render engine options prefer Jianying and keep built-in fallback recoverable", async () => {
   const { createRenderEngineOptions } = await importRenderingModule()
