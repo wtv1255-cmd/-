@@ -62,6 +62,11 @@ declare global {
         ok: boolean
         taskId?: string
         draftPath?: string
+        nativeDraftCreated?: boolean
+        nativeDraftPath?: string
+        nativeDraftError?: string
+        nativeDraftsRoot?: string
+        nativeMaterialsPath?: string
         manifestPath?: string
         contentPath?: string
         bytes?: number

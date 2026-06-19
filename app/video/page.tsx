@@ -1748,11 +1748,18 @@ function VideoFactoryShell() {
             ...plan.output,
             file: {
               ...plan.output.file,
-              path: draftResult.draftPath,
+              path: draftResult.nativeDraftPath || draftResult.draftPath,
               bytes: draftResult.bytes || 0,
             },
           }
         : plan.output
+    const createdMessage = draftResult?.nativeDraftCreated
+      ? `剪映原生草稿已导入：${draftResult.nativeDraftPath}`
+      : draftResult?.ok && draftResult.nativeDraftError
+        ? `剪映草稿包已创建：${draftResult.draftPath}；原生导入未完成：${draftResult.nativeDraftError}`
+        : draftResult?.ok
+          ? `剪映草稿包已创建：${draftOutput.file.path}`
+          : ""
 
     return {
       draftResult,
@@ -1763,7 +1770,7 @@ function VideoFactoryShell() {
         previewPath: draftOutput.file.path,
         status: draftResult?.ok ? "created" : plan.status,
         message: draftResult?.ok
-          ? `剪映草稿包已创建：${draftOutput.file.path}`
+          ? createdMessage
           : draftResult?.error
             ? `剪映草稿创建失败：${draftResult.error}`
             : desktopDraft

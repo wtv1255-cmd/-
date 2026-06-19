@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -159,6 +159,12 @@ test("Jianying draft writer creates a task-scoped editable draft package", async
   }
 })
 
+test("native Jianying draft helper is bundled with Electron sources", async () => {
+  await access(
+    path.join(projectRoot, "electron", "create-native-jianying-draft.py")
+  )
+})
+
 test("Jianying draft writer never overwrites an existing draft directory", async () => {
   const { createJianyingDraftPackage } = await importJianyingDraftModule()
   const userDataDir = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-draft-"))
@@ -179,5 +185,53 @@ test("Jianying draft writer never overwrites an existing draft directory", async
     assert.match(second.draftPath, /task_01-20260618-090000-1$/)
   } finally {
     await rm(userDataDir, { force: true, recursive: true })
+  }
+})
+
+test("Jianying draft writer can mirror a native Jianying draft into configured D drive roots", async () => {
+  const { createJianyingDraftPackage } = await importJianyingDraftModule()
+  const userDataDir = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-draft-"))
+  const jianyingDraftsRoot = await mkdtemp(path.join(tmpdir(), "JianyingPro Drafts-"))
+  const jianyingMaterialsRoot = await mkdtemp(path.join(tmpdir(), "JianyingPro Materials-"))
+
+  try {
+    const result = await createJianyingDraftPackage({
+      userDataDir,
+      plan: draftPlan,
+      jianyingDraftsRoot,
+      jianyingMaterialsRoot,
+    })
+
+    const nativeContentPath = path.join(
+      result.nativeDraftPath,
+      "draft_content.json"
+    )
+    const nativeMetaPath = path.join(
+      result.nativeDraftPath,
+      "draft_meta_info.json"
+    )
+    const sourcePackagePath = path.join(
+      result.nativeDraftPath,
+      "ta-huo-source-package",
+      "task-materials.json"
+    )
+    const settingsPath = path.join(userDataDir, "jianying-draft-settings.json")
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"))
+    assert.equal(result.ok, true)
+    assert.equal(result.nativeDraftCreated, true)
+    assert.equal(path.dirname(result.nativeDraftPath), jianyingDraftsRoot)
+    assert.equal(path.basename(result.nativeDraftPath), "task_01-20260618-090000")
+    assert.equal(result.nativeMaterialsPath, jianyingMaterialsRoot)
+    assert.deepEqual(settings, {
+      draftsRoot: jianyingDraftsRoot,
+      materialsRoot: jianyingMaterialsRoot,
+    })
+    assert.ok((await stat(nativeContentPath)).size > 0)
+    assert.ok((await stat(nativeMetaPath)).size > 0)
+    assert.ok((await stat(sourcePackagePath)).size > 0)
+  } finally {
+    await rm(userDataDir, { force: true, recursive: true })
+    await rm(jianyingDraftsRoot, { force: true, recursive: true })
+    await rm(jianyingMaterialsRoot, { force: true, recursive: true })
   }
 })

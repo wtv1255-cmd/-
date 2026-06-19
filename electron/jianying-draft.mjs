@@ -1,5 +1,14 @@
 import fs from "node:fs/promises"
+import { spawnSync } from "node:child_process"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
+
+const DEFAULT_JIANYING_DRAFTS_ROOT = "D:\\剪映草稿\\JianyingPro Drafts"
+const DEFAULT_JIANYING_MATERIALS_ROOT = "D:\\剪映草稿\\JianyingPro Materials"
+const nativeDraftScriptPath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "create-native-jianying-draft.py"
+)
 
 function cleanSegment(value, fallback) {
   const cleaned =
@@ -31,6 +40,134 @@ async function uniqueDraftPath(baseDir, draftName) {
     } catch {
       return draftPath
     }
+  }
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function resolveNativeDraftConfig({
+  userDataDir,
+  jianyingDraftsRoot,
+  jianyingMaterialsRoot,
+}) {
+  const draftsRoot =
+    typeof jianyingDraftsRoot === "string" && jianyingDraftsRoot.trim()
+      ? jianyingDraftsRoot.trim()
+      : DEFAULT_JIANYING_DRAFTS_ROOT
+  const materialsRoot =
+    typeof jianyingMaterialsRoot === "string" && jianyingMaterialsRoot.trim()
+      ? jianyingMaterialsRoot.trim()
+      : DEFAULT_JIANYING_MATERIALS_ROOT
+
+  return {
+    draftsRoot: path.resolve(draftsRoot),
+    materialsRoot: path.resolve(materialsRoot),
+    settingsPath: path.join(userDataDir, "jianying-draft-settings.json"),
+  }
+}
+
+async function writeNativeDraftSettings({ settingsPath, draftsRoot, materialsRoot }) {
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+  await fs.writeFile(
+    settingsPath,
+    JSON.stringify({ draftsRoot, materialsRoot }, null, 2),
+    "utf8"
+  )
+}
+
+function parseNativeDraftOutput(stdout) {
+  const lines = String(stdout || "")
+    .trim()
+    .split(/\r?\n/u)
+    .filter(Boolean)
+  for (const line of lines.reverse()) {
+    try {
+      const parsed = JSON.parse(line)
+      if (parsed && typeof parsed === "object") return parsed
+    } catch {}
+  }
+  return null
+}
+
+async function createNativeJianyingDraft({
+  userDataDir,
+  plan,
+  draftName,
+  sourcePackage,
+  jianyingDraftsRoot,
+  jianyingMaterialsRoot,
+}) {
+  const { draftsRoot, materialsRoot, settingsPath } = resolveNativeDraftConfig({
+    userDataDir,
+    jianyingDraftsRoot,
+    jianyingMaterialsRoot,
+  })
+  await writeNativeDraftSettings({ settingsPath, draftsRoot, materialsRoot })
+
+  if (!(await pathExists(nativeDraftScriptPath))) {
+    return {
+      nativeDraftCreated: false,
+      nativeDraftError: "缺少剪映原生草稿创建脚本",
+      nativeDraftsRoot: draftsRoot,
+      nativeMaterialsPath: materialsRoot,
+    }
+  }
+
+  const payloadPath = path.join(sourcePackage, "native-draft-payload.json")
+  await fs.writeFile(
+    payloadPath,
+    JSON.stringify(
+      {
+        draftsRoot,
+        materialsRoot,
+        draftName,
+        sourcePackage,
+        plan,
+      },
+      null,
+      2
+    ),
+    "utf8"
+  )
+
+  const result = spawnSync("python", [nativeDraftScriptPath, payloadPath], {
+    encoding: "utf8",
+    windowsHide: true,
+  })
+  if (result.status !== 0) {
+    return {
+      nativeDraftCreated: false,
+      nativeDraftError:
+        result.stderr?.trim() ||
+        result.stdout?.trim() ||
+        "Python 创建剪映原生草稿失败",
+      nativeDraftsRoot: draftsRoot,
+      nativeMaterialsPath: materialsRoot,
+    }
+  }
+
+  const output = parseNativeDraftOutput(result.stdout)
+  if (!output?.nativeDraftPath) {
+    return {
+      nativeDraftCreated: false,
+      nativeDraftError: "Python 未返回剪映原生草稿路径",
+      nativeDraftsRoot: draftsRoot,
+      nativeMaterialsPath: materialsRoot,
+    }
+  }
+
+  return {
+    nativeDraftCreated: true,
+    nativeDraftPath: output.nativeDraftPath,
+    nativeDraftsRoot: draftsRoot,
+    nativeMaterialsPath: output.nativeMaterialsPath || materialsRoot,
   }
 }
 
@@ -173,7 +310,12 @@ function createTaskMaterials(plan) {
   }
 }
 
-export async function createJianyingDraftPackage({ userDataDir, plan }) {
+export async function createJianyingDraftPackage({
+  userDataDir,
+  plan,
+  jianyingDraftsRoot,
+  jianyingMaterialsRoot,
+}) {
   try {
     const taskId = plan?.taskId || plan?.output?.file?.taskId || "task"
     const baseDir = resolveDraftBaseDir({ userDataDir, taskId })
@@ -201,6 +343,14 @@ export async function createJianyingDraftPackage({ userDataDir, plan }) {
     await fs.writeFile(manifestPath, JSON.stringify(directorPlan, null, 2), "utf8")
     await fs.writeFile(contentPath, JSON.stringify(draftContent, null, 2), "utf8")
     await fs.writeFile(materialsPath, JSON.stringify(taskMaterials, null, 2), "utf8")
+    const nativeDraft = await createNativeJianyingDraft({
+      userDataDir,
+      plan: directorPlan,
+      draftName,
+      sourcePackage: draftPath,
+      jianyingDraftsRoot,
+      jianyingMaterialsRoot,
+    })
 
     return {
       ok: true,
@@ -209,6 +359,7 @@ export async function createJianyingDraftPackage({ userDataDir, plan }) {
       manifestPath,
       contentPath,
       materialsPath,
+      ...nativeDraft,
       bytes: Buffer.byteLength(JSON.stringify(directorPlan)),
     }
   } catch (error) {
@@ -224,5 +375,7 @@ export function createJianyingDraftIpcHandler(userDataDir) {
     createJianyingDraftPackage({
       userDataDir,
       plan: input?.plan,
+      jianyingDraftsRoot: input?.jianyingDraftsRoot,
+      jianyingMaterialsRoot: input?.jianyingMaterialsRoot,
     })
 }

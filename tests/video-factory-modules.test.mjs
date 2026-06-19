@@ -167,6 +167,14 @@ test("asset module can export generated images directly to a Jianying draft", as
   assert.match(source, /promptCenterDesktop\?\.createJianyingDraft/)
 })
 
+test("desktop Jianying export prefers native imported draft path when available", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /draftResult\.nativeDraftPath \|\| draftResult\.draftPath/)
+  assert.match(source, /剪映原生草稿已导入/)
+  assert.match(source, /原生导入未完成/)
+})
+
 test("single-shot regenerate remains queueable while image generation is running", async () => {
   const source = await readVideoPage()
 
