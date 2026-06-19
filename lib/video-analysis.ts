@@ -290,6 +290,53 @@ function cleanScriptText(value: unknown, fallback = "") {
   return text || fallback
 }
 
+function isVisualDirectionLine(value: string) {
+  return /^[【\[]\s*(画面|镜头|场景|视觉|分镜)\s*[:：]/u.test(value.trim())
+}
+
+function splitVoiceLine(line: string, maxChars = 46) {
+  const sentenceChunks = line
+    .split(/(?<=[。！？!?；;])\s*/u)
+    .map((item) => cleanText(item))
+    .filter(Boolean)
+  const chunks = sentenceChunks.length ? sentenceChunks : [line]
+
+  return chunks.flatMap((chunk) => {
+    if (Array.from(chunk).length <= maxChars) return [chunk]
+    const softChunks = chunk
+      .split(/(?<=[，,、])\s*/u)
+      .map((item) => cleanText(item))
+      .filter(Boolean)
+    if (softChunks.length <= 1) return [chunk]
+
+    const merged: string[] = []
+    let current = ""
+    for (const item of softChunks) {
+      const next = `${current}${item}`
+      if (current && Array.from(next).length > maxChars) {
+        merged.push(current)
+        current = item
+      } else {
+        current = next
+      }
+    }
+    if (current) merged.push(current)
+    return merged
+  })
+}
+
+function splitVoiceScript(script: string) {
+  const lines = script
+    .split(/\n+/u)
+    .map((line) => cleanText(line))
+    .filter(Boolean)
+    .filter((line) => !isVisualDirectionLine(line))
+
+  const sentences = lines.flatMap((line) => splitVoiceLine(line))
+
+  return sentences.length ? sentences : ["等待用户输入口播文本"]
+}
+
 function packageLabel(packageId: VideoPackageId) {
   const labels: Record<VideoPackageId, string> = {
     stickman_meme: "火柴人爆梗",
@@ -427,10 +474,7 @@ function buildStructureSummaryFromScript(
 }
 
 function buildSentenceTimeline(script: string) {
-  return script
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
+  return splitVoiceScript(script)
     .slice(0, 8)
     .map((text, index) => ({
       id: `sentence_${String(index + 1).padStart(2, "0")}`,

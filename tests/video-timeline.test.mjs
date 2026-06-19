@@ -85,6 +85,72 @@ test("voice plan prefers tts timestamp cues over fallback timing", async () => {
   )
 })
 
+test("voice plan excludes visual direction lines from spoken subtitles", async () => {
+  const { createVoicePlanFromScript } = await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script: "【画面：火柴人躺床刷手机】\n睡一觉，AI漫画账号多了800块？\n[画面: 电脑屏幕全是乱码]\n别急着说不可能。",
+    durationPreset: "30-45s",
+    audioFilename: "voice.wav",
+  })
+
+  assert.deepEqual(
+    voice.subtitles.map((cue) => cue.text),
+    ["睡一觉，AI漫画账号多了800块？", "别急着说不可能。"]
+  )
+  assert.equal(voice.text.includes("画面"), false)
+})
+
+test("voice plan splits one-paragraph narration into subtitle cues", async () => {
+  const { createVoicePlanFromScript } = await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script:
+      "豆包加炎灵加剪映，一晚上搞定一部漫剧。第一，把小说丢进去生成全套资产。第二，视频生好之后一键导入剪映。第三，把镜头语言刻进骨头里。",
+    durationPreset: "45-60s",
+    includePlaceholderAudio: false,
+  })
+
+  assert.ok(voice.subtitles.length >= 4)
+  assert.equal(voice.subtitles[0].startMs, 0)
+  assert.equal(voice.subtitles.at(-1).endMs, 60000)
+  assert.equal(voice.subtitles.every((cue) => !cue.text.includes("画面")), true)
+})
+
+test("voice plan can generate subtitles without pretending audio exists", async () => {
+  const { createVoicePlanFromScript, createUnifiedVideoTimeline } =
+    await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script: "第一句。\n第二句。",
+    durationPreset: "30-45s",
+    includePlaceholderAudio: false,
+  })
+  const timeline = createUnifiedVideoTimeline({
+    taskId: "task_01",
+    voice,
+    storyboard: [
+      {
+        id: "shot_01",
+        assetIds: ["img_01"],
+        startMs: 0,
+        endMs: 3000,
+      },
+    ],
+  })
+
+  assert.equal(voice.audio, undefined)
+  assert.equal(voice.subtitles.length, 2)
+  assert.equal(
+    timeline.tracks.find((track) => track.id === "voice").clips.length,
+    0
+  )
+  assert.equal(
+    timeline.tracks.find((track) => track.id === "subtitle").clips.length,
+    2
+  )
+})
+
 test("timeline aligns visual voice subtitle bgm and sfx tracks", async () => {
   const { createVoicePlanFromScript, createUnifiedVideoTimeline } =
     await importTimelineModule()
@@ -257,4 +323,18 @@ test("duration presets control pacing across short and long modes", async () => 
   assert.equal(short.subtitles.at(-1).endMs, 45000)
   assert.equal(long.subtitles.at(-1).endMs, 120000)
   assert.ok(long.subtitles[0].endMs > short.subtitles[0].endMs)
+})
+
+test("voice plan can align fallback subtitles to generated audio duration", async () => {
+  const { createVoicePlanFromScript } = await importTimelineModule()
+  const voice = createVoicePlanFromScript({
+    taskId: "task_01",
+    script: "第一句。\n第二句更长一点。",
+    durationPreset: "45-60s",
+    generatedAudioDurationMs: 4321,
+    audioFilename: "cloned.wav",
+  })
+
+  assert.equal(voice.subtitles.at(-1).endMs, 4321)
+  assert.equal(voice.audio.filename, "cloned.wav")
 })

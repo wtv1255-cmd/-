@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   checkLocalTtsProject(input) {
     return ipcRenderer.invoke("ta-huo:check-local-tts-project", input)
   },
+  synthesizeLocalTts(input) {
+    return ipcRenderer.invoke("ta-huo:synthesize-local-tts", input)
+  },
   selectAudioFile() {
     return ipcRenderer.invoke("ta-huo:select-audio-file")
   },
@@ -20,8 +23,26 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   saveTaskAssetFile(input) {
     return ipcRenderer.invoke("ta-huo:save-task-asset-file", input)
   },
+  copyTaskAssetFile(input) {
+    return ipcRenderer.invoke("ta-huo:copy-task-asset-file", input)
+  },
   readTaskAssetPreview(input) {
     return ipcRenderer.invoke("ta-huo:read-task-asset-preview", input)
+  },
+  deleteTaskCache(input) {
+    return ipcRenderer.invoke("ta-huo:delete-task-cache", input)
+  },
+  appendTaskRunEvent(input) {
+    return ipcRenderer.invoke("ta-huo:append-task-run-event", input)
+  },
+  readTaskRunEvents(input) {
+    return ipcRenderer.invoke("ta-huo:read-task-run-events", input)
+  },
+  readTaskRunSummary(input) {
+    return ipcRenderer.invoke("ta-huo:read-task-run-summary", input)
+  },
+  clearTaskRunLog(input) {
+    return ipcRenderer.invoke("ta-huo:clear-task-run-log", input)
   },
   createJianyingDraft(input) {
     return ipcRenderer.invoke("ta-huo:create-jianying-draft", input)

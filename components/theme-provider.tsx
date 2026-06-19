@@ -15,6 +15,24 @@ declare global {
         missing?: string[]
         error?: string
       }>
+      synthesizeLocalTts?: (input: {
+        taskId: string
+        text: string
+        projectPath: string
+        referenceAudioPath: string
+        outputFilename?: string
+        launchArgs?: string[]
+        maxTextTokensPerSegment?: number
+      }) => Promise<{
+        ok: boolean
+        taskId?: string
+        filename?: string
+        filePath?: string
+        bytes?: number
+        mimeType?: string
+        durationMs?: number
+        error?: string
+      }>
       selectAudioFile?: () => Promise<{
         canceled?: boolean
         filePath?: string
@@ -47,6 +65,21 @@ declare global {
         dataUrl?: string
         error?: string
       }>
+      copyTaskAssetFile?: (input: {
+        taskId: string
+        kind: string
+        sourcePath: string
+        filename?: string
+        mimeType?: string
+      }) => Promise<{
+        ok: boolean
+        taskId?: string
+        filename?: string
+        filePath?: string
+        bytes?: number
+        mimeType?: string
+        error?: string
+      }>
       readTaskAssetPreview?: (input: {
         filePath: string
         mimeType?: string
@@ -56,6 +89,54 @@ declare global {
         bytes?: number
         mimeType?: string
         dataUrl?: string
+        error?: string
+      }>
+      deleteTaskCache?: (input: { taskId: string }) => Promise<{
+        ok: boolean
+        taskId?: string
+        deletedPath?: string
+        existed?: boolean
+        error?: string
+      }>
+      appendTaskRunEvent?: (input: {
+        taskId: string
+        stage: string
+        state: string
+        message: string
+        current?: number
+        total?: number
+        progress?: number
+        artifact?: {
+          kind: string
+          path: string
+          label: string
+        }
+        error?: {
+          code: string
+          message: string
+          retryable: boolean
+        }
+      }) => Promise<{
+        ok: boolean
+        event?: unknown
+        summary?: unknown
+        error?: string
+      }>
+      readTaskRunEvents?: (input: { taskId: string }) => Promise<{
+        ok: boolean
+        taskId?: string
+        events?: unknown[]
+        error?: string
+      }>
+      readTaskRunSummary?: (input: { taskId: string }) => Promise<{
+        ok: boolean
+        taskId?: string
+        summary?: unknown
+        error?: string
+      }>
+      clearTaskRunLog?: (input: { taskId: string }) => Promise<{
+        ok: boolean
+        taskId?: string
         error?: string
       }>
       createJianyingDraft?: (input: { plan: unknown }) => Promise<{

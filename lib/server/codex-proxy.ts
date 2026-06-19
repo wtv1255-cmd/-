@@ -816,22 +816,64 @@ function outputFormatToMime(format: string) {
   return "image/png"
 }
 
+function stripHtmlTags(value: string) {
+  return value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, " ")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/&nbsp;/giu, " ")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/&amp;/giu, "&")
+    .replace(/&quot;/giu, '"')
+    .replace(/&#39;/giu, "'")
+}
+
+function summarizeGatewayError(message: string, status: number) {
+  const normalized = message.replace(/\s+/g, " ").trim()
+  if (/gateway\s+time-?out|gateway\s+timeout/i.test(normalized)) {
+    return `上游网关超时：${status} Gateway Time-out`
+  }
+  if (/service\s+temporarily\s+unavailable/i.test(normalized)) {
+    return `上游服务暂时不可用：${status}`
+  }
+  return ""
+}
+
+function sanitizeUpstreamErrorMessage(value: unknown, status: number) {
+  const raw = typeof value === "string" ? value.trim() : ""
+  if (!raw) return `请求失败：${status}`
+
+  const plain = /<[^>]+>/u.test(raw) ? stripHtmlTags(raw) : raw
+  const normalized = plain.replace(/\s+/g, " ").trim()
+  const gatewaySummary = summarizeGatewayError(normalized, status)
+  if (gatewaySummary) return gatewaySummary
+
+  return normalized.slice(0, 240) || `请求失败：${status}`
+}
+
 function readUpstreamError(payload: unknown, status: number) {
   if (payload && typeof payload === "object") {
     if ("error" in payload) {
       const error = (payload as { error?: unknown }).error
-      if (typeof error === "string" && error.trim()) return error
+      if (typeof error === "string" && error.trim())
+        return sanitizeUpstreamErrorMessage(error, status)
       if (error && typeof error === "object" && "message" in error)
-        return String(
-          (error as { message?: unknown }).message || `请求失败：${status}`
+        return sanitizeUpstreamErrorMessage(
+          (error as { message?: unknown }).message,
+          status
         )
     }
     if ("message" in payload)
-      return String(
-        (payload as { message?: unknown }).message || `请求失败：${status}`
+      return sanitizeUpstreamErrorMessage(
+        (payload as { message?: unknown }).message,
+        status
       )
     if ("msg" in payload)
-      return String((payload as { msg?: unknown }).msg || `请求失败：${status}`)
+      return sanitizeUpstreamErrorMessage(
+        (payload as { msg?: unknown }).msg,
+        status
+      )
   }
   return `请求失败：${status}`
 }

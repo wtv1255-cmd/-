@@ -167,6 +167,37 @@ test("image generation presets default to vertical 9:16 with advanced overrides"
   assert.equal(request.size, "1024x1792")
 })
 
+test("generated images must match the selected storyboard aspect ratio", async () => {
+  const {
+    normalizeVideoImageGenerationSettings,
+    validateGeneratedImageAspectRatio,
+  } = await importVideoAssetsModule()
+  const verticalSettings = normalizeVideoImageGenerationSettings({
+    presetId: "vertical_9_16",
+  })
+
+  assert.equal(
+    validateGeneratedImageAspectRatio({
+      width: 1024,
+      height: 1792,
+      settings: verticalSettings,
+    }).ok,
+    true
+  )
+  assert.deepEqual(
+    validateGeneratedImageAspectRatio({
+      width: 2560,
+      height: 1440,
+      settings: verticalSettings,
+    }),
+    {
+      ok: false,
+      expectedAspectRatio: "9:16",
+      actualAspectRatio: "16:9",
+    }
+  )
+})
+
 test("per-shot generation plan skips successful shots unless regenerate is explicit", async () => {
   const {
     createPerShotImageGenerationPlan,

@@ -93,6 +93,88 @@ function splitScript(script: string) {
   return lines.length ? lines : ["开头钩子", "演示过程", "结果证明", "结尾转化"]
 }
 
+function readVisualDirectionLine(value: string) {
+  const match = value
+    .trim()
+    .match(/^[【\[]\s*(画面|镜头|场景|视觉|分镜)\s*[:：]\s*(.+?)[】\]]?$/u)
+  return match?.[2]?.trim() || ""
+}
+
+function splitVoiceLine(line: string, maxChars = 46) {
+  const sentenceChunks = line
+    .split(/(?<=[。！？!?；;])\s*/u)
+    .map((item) => cleanText(item, ""))
+    .filter(Boolean)
+  const chunks = sentenceChunks.length ? sentenceChunks : [line]
+
+  return chunks.flatMap((chunk) => {
+    if (Array.from(chunk).length <= maxChars) return [chunk]
+    const softChunks = chunk
+      .split(/(?<=[，,、])\s*/u)
+      .map((item) => cleanText(item, ""))
+      .filter(Boolean)
+    if (softChunks.length <= 1) return [chunk]
+
+    const merged: string[] = []
+    let current = ""
+    for (const item of softChunks) {
+      const next = `${current}${item}`
+      if (current && Array.from(next).length > maxChars) {
+        merged.push(current)
+        current = item
+      } else {
+        current = next
+      }
+    }
+    if (current) merged.push(current)
+    return merged
+  })
+}
+
+function parseScriptChannels(script: string) {
+  type ScriptChannelSegment = {
+    voiceText: string
+    visualDescription?: string
+  }
+  const segments: ScriptChannelSegment[] = []
+  let pendingVisualDescription = ""
+
+  for (const line of splitScript(script)) {
+    const visualDescription = readVisualDirectionLine(line)
+    if (visualDescription) {
+      pendingVisualDescription = pendingVisualDescription
+        ? `${pendingVisualDescription}；${visualDescription}`
+        : visualDescription
+      continue
+    }
+
+    const chunks = splitVoiceLine(line)
+
+    for (const [index, voiceText] of chunks.entries()) {
+      segments.push({
+        voiceText,
+        visualDescription:
+          index === 0 ? pendingVisualDescription || undefined : undefined,
+      })
+    }
+    pendingVisualDescription = ""
+  }
+
+  if (!segments.length) {
+    return splitScript(script).map(
+      (line): ScriptChannelSegment => ({ voiceText: line })
+    )
+  }
+  if (pendingVisualDescription) {
+    const previous = segments[segments.length - 1]
+    previous.visualDescription = previous.visualDescription
+      ? `${previous.visualDescription}；${pendingVisualDescription}`
+      : pendingVisualDescription
+  }
+
+  return segments
+}
+
 function resolveDurationMs(preset: VideoDurationPreset) {
   return (
     VIDEO_DURATION_OPTIONS.find((option) => option.id === preset)?.targetMs ||
@@ -145,9 +227,14 @@ function buildSceneIntent(
 function buildPrompt(
   voiceText: string,
   visualType: VideoVisualType,
-  board?: CopywritingBoardId
+  board?: CopywritingBoardId,
+  visualDescription?: string
 ) {
-  const sceneIntent = buildSceneIntent(voiceText, board, visualType)
+  const sceneIntent = buildSceneIntent(
+    visualDescription || voiceText,
+    board,
+    visualType
+  )
   const commonConstraint =
     "只描述可生成的画面场景，不要文字、不要字幕、不要对话框、不要气泡、不要 logo、不要品牌标志"
   if (visualType === "stickman") {
@@ -177,25 +264,35 @@ export function createStoryboardFromScript({
   durationPreset,
   copywritingBoard = "generic_rewrite",
 }: CreateStoryboardFromScriptInput): StoryboardShot[] {
-  const lines = splitScript(script)
+  const segments = parseScriptChannels(script)
   const resolvedPackages = resolvePackageIds(packageIds)
   const totalMs = resolveDurationMs(durationPreset)
-  const stepMs = Math.floor(totalMs / lines.length)
+  const stepMs = Math.floor(totalMs / segments.length)
 
-  return lines.map((line, index) => {
+  return segments.map((segment, index) => {
     const visualType = visualTypeForPackage(resolvedPackages, index)
     const startMs = index * stepMs
-    const endMs = index === lines.length - 1 ? totalMs : (index + 1) * stepMs
+    const endMs =
+      index === segments.length - 1 ? totalMs : (index + 1) * stepMs
+    const packageLabel = VIDEO_PACKAGE_OPTIONS.find(
+      (option) => option.id === resolvedPackages[index % resolvedPackages.length]
+    )?.label
+    const visualDescription =
+      segment.visualDescription || `${packageLabel}：${segment.voiceText}`
+
     return {
       id: shotIdForIndex(index),
       startMs,
       endMs,
-      voiceText: line,
+      voiceText: segment.voiceText,
       visualType,
-      visualDescription: `${VIDEO_PACKAGE_OPTIONS.find(
-        (option) => option.id === resolvedPackages[index % resolvedPackages.length]
-      )?.label}：${line}`,
-      prompt: buildPrompt(line, visualType, copywritingBoard),
+      visualDescription,
+      prompt: buildPrompt(
+        segment.voiceText,
+        visualType,
+        copywritingBoard,
+        visualDescription
+      ),
       negativePrompt: IMAGE_SCENE_NEGATIVE_PROMPT,
       assetIds: [],
       status: "draft",

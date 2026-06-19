@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -165,6 +165,140 @@ test("native Jianying draft helper is bundled with Electron sources", async () =
   )
 })
 
+test("native Jianying draft helper imports visual media instead of subtitles only", async () => {
+  const source = await readFile(
+    path.join(projectRoot, "electron", "create-native-jianying-draft.py"),
+    "utf8"
+  )
+
+  assert.match(source, /asset_by_id/)
+  assert.match(source, /project\.add_media_safe/)
+  assert.match(source, /track_name=["']Visual["']/)
+  assert.match(source, /is_visual_clip/)
+  assert.match(source, /trackId/)
+  assert.doesNotMatch(
+    source,
+    /if clip\.get\("type"\) != "subtitle" or not clip\.get\("text"\):/
+  )
+})
+
+test("native Jianying draft helper resolves stale visual asset ids by shot tag", async () => {
+  const { createJianyingDraftPackage } = await importJianyingDraftModule()
+  const userDataDir = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-draft-"))
+  const jianyingDraftsRoot = await mkdtemp(path.join(tmpdir(), "JianyingPro Drafts-"))
+  const jianyingMaterialsRoot = await mkdtemp(path.join(tmpdir(), "JianyingPro Materials-"))
+  const materialRoot = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-material-"))
+  const imagePath = path.join(materialRoot, "01_shot_01_0-3s_stickman.png")
+  const pngBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l0u3qAAAAABJRU5ErkJggg==",
+    "base64"
+  )
+  await writeFile(imagePath, pngBytes)
+  const stalePlan = {
+    ...draftPlan,
+    aiDirector: {
+      trackOrder: ["visual", "subtitle"],
+      clips: [
+        {
+          id: "shot_01_visual",
+          trackId: "visual",
+          type: "visual",
+          assetId: "stickman_image_01_shot_01_0-3s_stickman.png_1781836337937",
+          startMs: 0,
+          durationMs: 3000,
+          locked: false,
+          aiEditable: true,
+          placeholder: false,
+        },
+        {
+          id: "subtitle_01",
+          trackId: "subtitle",
+          type: "subtitle",
+          assetId: "subtitle_01",
+          startMs: 0,
+          durationMs: 3000,
+          text: "小白也能一键生成短视频",
+          emphasisSubtitle: true,
+        },
+      ],
+    },
+    materialAssets: [
+      {
+        ...draftPlan.materialAssets[0],
+        id: "stickman_image_01_shot_01_0-3s_stickman.png_1781839938812",
+        displayName: "01_shot_01_0-3s_stickman.png",
+        file: {
+          ...draftPlan.materialAssets[0].file,
+          filename: "01_shot_01_0-3s_stickman.png",
+          path: imagePath,
+          bytes: pngBytes.byteLength,
+        },
+        tags: ["shot_01", "generated_image"],
+      },
+    ],
+  }
+
+  try {
+    const result = await createJianyingDraftPackage({
+      userDataDir,
+      plan: stalePlan,
+      jianyingDraftsRoot,
+      jianyingMaterialsRoot,
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(
+      result.nativeDraftCreated,
+      true,
+      result.nativeDraftError || "native draft should resolve stale visual ids"
+    )
+    assert.equal(result.nativeDraftSummary.videoSegmentCount, 1)
+    assert.equal(result.nativeDraftSummary.textSegmentCount, 1)
+  } finally {
+    await rm(userDataDir, { force: true, recursive: true })
+    await rm(jianyingDraftsRoot, { force: true, recursive: true })
+    await rm(jianyingMaterialsRoot, { force: true, recursive: true })
+    await rm(materialRoot, { force: true, recursive: true })
+  }
+})
+
+test("native Jianying draft helper skips visual direction text as subtitles", async () => {
+  const source = await readFile(
+    path.join(projectRoot, "electron", "create-native-jianying-draft.py"),
+    "utf8"
+  )
+
+  assert.match(source, /is_visible_subtitle_text/)
+  assert.match(source, /画面/)
+  assert.match(source, /emphasisSubtitle/)
+})
+
+test("native Jianying draft helper creates projects using the plan canvas size", async () => {
+  const source = await readFile(
+    path.join(projectRoot, "electron", "create-native-jianying-draft.py"),
+    "utf8"
+  )
+
+  assert.match(source, /canvas/)
+  assert.match(source, /resolve_canvas/)
+  assert.match(source, /width=canvas\["width"\]/)
+  assert.match(source, /height=canvas\["height"\]/)
+})
+
+test("Electron native draft creation validates video tracks and visual-direction subtitles", async () => {
+  const source = await readFile(
+    path.join(projectRoot, "electron", "jianying-draft.mjs"),
+    "utf8"
+  )
+
+  assert.match(source, /validateNativeDraft/)
+  assert.match(source, /videoSegmentCount/)
+  assert.match(source, /hasVisualDirectionSubtitle/)
+  assert.match(source, /readTextMaterialText/)
+  assert.match(source, /剪映原生草稿缺少视频\/图片轨/)
+  assert.match(source, /字幕包含【画面】提示/)
+})
+
 test("Jianying draft writer never overwrites an existing draft directory", async () => {
   const { createJianyingDraftPackage } = await importJianyingDraftModule()
   const userDataDir = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-draft-"))
@@ -193,11 +327,33 @@ test("Jianying draft writer can mirror a native Jianying draft into configured D
   const userDataDir = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-draft-"))
   const jianyingDraftsRoot = await mkdtemp(path.join(tmpdir(), "JianyingPro Drafts-"))
   const jianyingMaterialsRoot = await mkdtemp(path.join(tmpdir(), "JianyingPro Materials-"))
+  const materialRoot = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-material-"))
+  const imagePath = path.join(materialRoot, "stickman_01.png")
+  const pngBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l0u3qAAAAABJRU5ErkJggg==",
+    "base64"
+  )
+  await writeFile(imagePath, pngBytes)
+  const nativePlan = {
+    ...draftPlan,
+    materialAssets: draftPlan.materialAssets.map((asset) =>
+      asset.id === "stickman_01"
+        ? {
+            ...asset,
+            file: {
+              ...asset.file,
+              path: imagePath,
+              bytes: pngBytes.byteLength,
+            },
+          }
+        : asset
+    ),
+  }
 
   try {
     const result = await createJianyingDraftPackage({
       userDataDir,
-      plan: draftPlan,
+      plan: nativePlan,
       jianyingDraftsRoot,
       jianyingMaterialsRoot,
     })
@@ -218,7 +374,11 @@ test("Jianying draft writer can mirror a native Jianying draft into configured D
     const settingsPath = path.join(userDataDir, "jianying-draft-settings.json")
     const settings = JSON.parse(await readFile(settingsPath, "utf8"))
     assert.equal(result.ok, true)
-    assert.equal(result.nativeDraftCreated, true)
+    assert.equal(
+      result.nativeDraftCreated,
+      true,
+      result.nativeDraftError || "native draft should be created"
+    )
     assert.equal(path.dirname(result.nativeDraftPath), jianyingDraftsRoot)
     assert.equal(path.basename(result.nativeDraftPath), "task_01-20260618-090000")
     assert.equal(result.nativeMaterialsPath, jianyingMaterialsRoot)
@@ -233,5 +393,6 @@ test("Jianying draft writer can mirror a native Jianying draft into configured D
     await rm(userDataDir, { force: true, recursive: true })
     await rm(jianyingDraftsRoot, { force: true, recursive: true })
     await rm(jianyingMaterialsRoot, { force: true, recursive: true })
+    await rm(materialRoot, { force: true, recursive: true })
   }
 })

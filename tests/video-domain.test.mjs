@@ -257,3 +257,38 @@ test("video task snapshots persist production recovery metadata", async () => {
   assert.equal(restored.recovery.requiresUserConfirmation, true)
   assert.equal(restored.recovery.steps[0].shouldRegenerate, false)
 })
+
+test("video task snapshot deletion removes only the selected task snapshot", async () => {
+  const {
+    createVideoTaskSnapshot,
+    deleteVideoTaskSnapshot,
+    readVideoTaskSnapshot,
+    saveVideoTaskSnapshot,
+    VIDEO_TASK_SNAPSHOT_STORAGE_PREFIX,
+  } = await importVideoDomainModule()
+  const storage = new Map()
+  const browserStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+    removeItem: (key) => storage.delete(key),
+  }
+  const first = createVideoTaskSnapshot({
+    id: "task_delete",
+    title: "待删除任务",
+  })
+  const second = createVideoTaskSnapshot({
+    id: "task_keep",
+    title: "保留任务",
+  })
+
+  saveVideoTaskSnapshot(first, browserStorage)
+  saveVideoTaskSnapshot(second, browserStorage)
+  deleteVideoTaskSnapshot("task_delete", browserStorage)
+
+  assert.equal(
+    storage.has(`${VIDEO_TASK_SNAPSHOT_STORAGE_PREFIX}task_delete`),
+    false
+  )
+  assert.equal(readVideoTaskSnapshot("task_delete", browserStorage), null)
+  assert.equal(readVideoTaskSnapshot("task_keep", browserStorage).title, "保留任务")
+})

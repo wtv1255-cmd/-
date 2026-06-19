@@ -90,6 +90,11 @@ export type JianyingDraftPlan = {
   status: JianyingDraftPlanStatus
   defaultOutputKind: "jianying_draft"
   mp4ExportDefault: false
+  canvas: {
+    aspectRatio: "9:16" | "16:9" | "1:1"
+    width: number
+    height: number
+  }
   output: VideoAsset
   previewPath: string
   command: string
@@ -125,6 +130,7 @@ export type CreateRenderExportPlanInput = {
 export type CreateJianyingDraftPlanInput = {
   taskId: string
   timeline: VideoTimeline
+  canvasAspectRatio?: JianyingDraftPlan["canvas"]["aspectRatio"]
   createdAt?: string
   lockedShotIds?: string[]
   lockedTrackIds?: string[]
@@ -269,6 +275,78 @@ function cleanText(value: unknown, fallback = "") {
   return text || fallback
 }
 
+function extractShotId(...values: unknown[]) {
+  for (const value of values) {
+    const match = String(value || "").match(/shot[_-]?(\d+)/iu)
+    if (match?.[1]) return `shot_${match[1].padStart(2, "0")}`
+  }
+  return ""
+}
+
+function normalizeAssetKey(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/_\d{8,}$/u, "") || ""
+}
+
+function isVisualDirectorClip(clip: JianyingDraftDirectorClip) {
+  return clip.type === "visual" || clip.trackId === "visual"
+}
+
+function resolveMaterialAssetForDirectorClip(
+  clip: JianyingDraftDirectorClip,
+  materialAssets: JianyingDraftMaterialAsset[]
+) {
+  const exact = materialAssets.find((asset) => asset.id === clip.assetId)
+  if (exact) return exact
+  if (!isVisualDirectorClip(clip)) return undefined
+
+  const shotId = extractShotId(clip.id, clip.assetId)
+  if (shotId) {
+    const taggedAsset = materialAssets.find(
+      (asset) =>
+        asset.kind === "stickman_image" &&
+        asset.tags?.includes("generated_image") &&
+        asset.tags?.includes(shotId)
+    )
+    if (taggedAsset) return taggedAsset
+  }
+
+  const clipKey = normalizeAssetKey(clip.assetId)
+  if (!clipKey) return undefined
+
+  return materialAssets.find((asset) => {
+    if (asset.kind !== "stickman_image") return false
+    const keys = [
+      normalizeAssetKey(asset.id),
+      normalizeAssetKey(asset.displayName),
+      normalizeAssetKey(asset.file?.filename),
+    ].filter(Boolean)
+    return keys.some((key) => clipKey === key || clipKey.endsWith(key))
+  })
+}
+
+function reconcileDirectorMaterialRefs(
+  aiDirector: JianyingDraftPlan["aiDirector"],
+  materialAssets: JianyingDraftMaterialAsset[]
+): JianyingDraftPlan["aiDirector"] {
+  if (!materialAssets.length) return aiDirector
+
+  return {
+    ...aiDirector,
+    clips: aiDirector.clips.map((clip) => {
+      const asset = resolveMaterialAssetForDirectorClip(clip, materialAssets)
+      return asset && asset.id !== clip.assetId
+        ? { ...clip, assetId: asset.id }
+        : clip
+    }),
+  }
+}
+
 const productBrandOverlayLabels: Array<
   Pick<JianyingDraftBrandOverlay, "labelId" | "label">
 > = [
@@ -276,6 +354,18 @@ const productBrandOverlayLabels: Array<
   { labelId: "yanling_icon", label: "燕翎图标" },
   { labelId: "jianying_icon", label: "剪映图标" },
 ]
+
+function resolveDraftCanvas(
+  aspectRatio: CreateJianyingDraftPlanInput["canvasAspectRatio"] = "9:16"
+): JianyingDraftPlan["canvas"] {
+  if (aspectRatio === "16:9") {
+    return { aspectRatio, width: 1920, height: 1080 }
+  }
+  if (aspectRatio === "1:1") {
+    return { aspectRatio, width: 1080, height: 1080 }
+  }
+  return { aspectRatio: "9:16", width: 1080, height: 1920 }
+}
 
 function createBrandOverlays({
   copywritingBoard,
@@ -727,6 +817,7 @@ export function createRenderEngineOptions(
 export function createJianyingDraftPlan({
   taskId,
   timeline,
+  canvasAspectRatio = "9:16",
   createdAt,
   lockedShotIds = [],
   lockedTrackIds = [],
@@ -737,6 +828,7 @@ export function createJianyingDraftPlan({
   copywritingBoard = "generic_rewrite",
 }: CreateJianyingDraftPlanInput): JianyingDraftPlan {
   const output = createJianyingDraftAsset(taskId, createdAt)
+  const canvas = resolveDraftCanvas(canvasAspectRatio)
   const requiredConfirmations = missingConfirmations({
     requestedActions,
     confirmedActions,
@@ -757,6 +849,7 @@ export function createJianyingDraftPlan({
     status,
     defaultOutputKind: "jianying_draft",
     mp4ExportDefault: false,
+    canvas,
     output,
     previewPath: output.file.path,
     command: `ta-huo-create-jianying-draft --task "${cleanSegment(
@@ -769,13 +862,15 @@ export function createJianyingDraftPlan({
         : status === "needs_confirmation"
           ? `需要用户确认：${requiredConfirmations.join("、")}`
           : "剪映可编辑草稿计划已准备，默认不会导出 MP4。",
-    aiDirector:
+    aiDirector: reconcileDirectorMaterialRefs(
       aiDirectorPlan ||
-      createDirectorPlan({
-        timeline,
-        lockedShotIds,
-        lockedTrackIds,
-      }),
+        createDirectorPlan({
+          timeline,
+          lockedShotIds,
+          lockedTrackIds,
+        }),
+      materialAssets
+    ),
     materialAssets,
     brandOverlays,
     requiredConfirmations,

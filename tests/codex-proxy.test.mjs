@@ -122,3 +122,32 @@ test("521 image base keeps legacy async video image task route", async () => {
   assert.equal(result.payload.model, "gpt-image-2-2K")
   assert.equal(result.payload.aspect_ratio, "9:16")
 })
+
+test("chat proxy summarizes html gateway errors instead of returning raw markup", async () => {
+  const { forwardCodexChatJson } = await importCodexProxyModule()
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = async () =>
+    new Response(
+      "<html><head><title>504 Gateway Time-out</title></head><body><center><h1>504 Gateway Time-out</h1></center></body></html>",
+      {
+        status: 504,
+        headers: { "Content-Type": "text/html" },
+      }
+    )
+
+  try {
+    const result = await forwardCodexChatJson(
+      "/v1/chat/completions",
+      { model: "gpt-5.5", messages: [{ role: "user", content: "OK" }] },
+      "https://kfcoding.codes/v1",
+      "fixture"
+    )
+
+    assert.equal(result.init.status, 504)
+    assert.match(result.body.error, /504/)
+    assert.match(result.body.error, /超时|网关|Gateway/i)
+    assert.doesNotMatch(result.body.error, /<html|<body|<h1/i)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})

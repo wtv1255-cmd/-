@@ -146,6 +146,23 @@ test("pasted script passthrough creates draft without a text model request", asy
   assert.equal(draft.sentenceTimeline.length, 3)
 })
 
+test("pasted script sentence timeline excludes visual directions and splits paragraphs", async () => {
+  const { createPastedScriptDraft } = await importVideoAnalysisModule()
+  const draft = createPastedScriptDraft({
+    script:
+      "【画面：火柴人躺床刷手机】\n豆包加炎灵加剪映，一晚上搞定一部漫剧。第一，把小说丢进去生成全套资产。",
+    rewriteMode: "original",
+  })
+
+  assert.deepEqual(
+    draft.sentenceTimeline.map((cue) => cue.text),
+    [
+      "豆包加炎灵加剪映，一晚上搞定一部漫剧。",
+      "第一，把小说丢进去生成全套资产。",
+    ]
+  )
+})
+
 test("rewrite strengths expose A B C channels with B as full auto default", async () => {
   const {
     SCRIPT_REWRITE_MODE_OPTIONS,

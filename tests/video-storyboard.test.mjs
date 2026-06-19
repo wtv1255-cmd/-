@@ -85,6 +85,48 @@ test("storyboard image prompts avoid text logo and dialogue while preserving pro
   assert.doesNotMatch(joinedPrompts, /品牌贴片|绘制.*图标/)
 })
 
+test("storyboard separates narration from visual direction lines", async () => {
+  const { createStoryboardFromScript } = await importStoryboardModule()
+  const shots = createStoryboardFromScript({
+    script:
+      "【画面：火柴人躺床上刷手机，头顶弹出余额+800】\n有人靠AI画漫画，睡一觉起来账户多了八百块，你信不信？\n【画面：火柴人猛地坐起来，满头问号变成感叹号】\n别急着说不可能，我今天就把这套路子拆碎了喂你嘴里。",
+    packageIds: ["stickman_meme"],
+    durationPreset: "30-45s",
+  })
+
+  assert.equal(shots.length, 2)
+  assert.deepEqual(
+    shots.map((shot) => shot.voiceText),
+    [
+      "有人靠AI画漫画，睡一觉起来账户多了八百块，你信不信？",
+      "别急着说不可能，我今天就把这套路子拆碎了喂你嘴里。",
+    ]
+  )
+  assert.match(shots[0].visualDescription, /火柴人躺床上刷手机/)
+  assert.match(shots[1].visualDescription, /火柴人猛地坐起来/)
+  assert.doesNotMatch(shots[0].voiceText, /画面/)
+  assert.doesNotMatch(shots[0].prompt, /【画面/)
+  assert.equal(shots.at(-1).endMs, 45000)
+})
+
+test("storyboard splits pasted one-paragraph narration into timed shots", async () => {
+  const { createStoryboardFromScript } = await importStoryboardModule()
+  const shots = createStoryboardFromScript({
+    script:
+      "豆包加炎灵加剪映，一晚上搞定一部漫剧。第一，把小说丢进去生成全套资产。第二，视频生好之后一键导入剪映。第三，把镜头语言刻进骨头里。",
+    packageIds: ["stickman_meme"],
+    durationPreset: "45-60s",
+  })
+
+  assert.ok(shots.length >= 4)
+  assert.equal(shots[0].startMs, 0)
+  assert.equal(shots.at(-1).endMs, 60000)
+  assert.equal(
+    shots.every((shot) => Array.from(shot.voiceText).length <= 52),
+    true
+  )
+})
+
 test("non product storyboard does not inject product names or overlay requirements", async () => {
   const { createStoryboardFromScript } = await importStoryboardModule()
   const shots = createStoryboardFromScript({

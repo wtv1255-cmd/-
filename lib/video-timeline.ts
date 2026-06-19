@@ -13,7 +13,10 @@ export type CreateVoicePlanFromScriptInput = {
   taskId: string
   script: string
   durationPreset: VideoDurationPreset
+  generatedAudioDurationMs?: number
   audioFilename?: string
+  audioFile?: TaskFileRef
+  includePlaceholderAudio?: boolean
   ttsCues?: Array<{
     text: string
     startMs: number
@@ -58,6 +61,10 @@ function cleanText(value: unknown, fallback = "") {
   return text || fallback
 }
 
+function isVisualDirectionLine(value: string) {
+  return /^[【\[]\s*(画面|镜头|场景|视觉|分镜)\s*[:：]/u.test(value.trim())
+}
+
 function cleanSegment(value: unknown, fallback: string) {
   const cleaned =
     typeof value === "string"
@@ -70,11 +77,44 @@ function cleanSegment(value: unknown, fallback: string) {
 }
 
 function splitScript(script: string) {
-  const parts = script
+  const lines = script
     .split(/\n+/)
     .map((line) => cleanText(line))
+    .filter((line) => !isVisualDirectionLine(line))
     .filter(Boolean)
+  const parts = lines.flatMap((line) => splitVoiceLine(line))
   return parts.length ? parts : ["等待用户输入口播文本"]
+}
+
+function splitVoiceLine(line: string, maxChars = 46) {
+  const sentenceChunks = line
+    .split(/(?<=[。！？!?；;])\s*/u)
+    .map((item) => cleanText(item))
+    .filter(Boolean)
+  const chunks = sentenceChunks.length ? sentenceChunks : [line]
+
+  return chunks.flatMap((chunk) => {
+    if (Array.from(chunk).length <= maxChars) return [chunk]
+    const softChunks = chunk
+      .split(/(?<=[，,、])\s*/u)
+      .map((item) => cleanText(item))
+      .filter(Boolean)
+    if (softChunks.length <= 1) return [chunk]
+
+    const merged: string[] = []
+    let current = ""
+    for (const item of softChunks) {
+      const next = `${current}${item}`
+      if (current && Array.from(next).length > maxChars) {
+        merged.push(current)
+        current = item
+      } else {
+        current = next
+      }
+    }
+    if (current) merged.push(current)
+    return merged
+  })
 }
 
 function createVoiceFileRef(taskId: string, filename: string): TaskFileRef {
@@ -113,7 +153,7 @@ function createSubtitleCuesFromTts(
       const startMs = normalizeCueTiming(cue.startMs)
       const endMs = normalizeCueTiming(cue.endMs)
       const text = cleanText(cue.text)
-      if (!text || endMs <= startMs) return null
+      if (!text || isVisualDirectionLine(text) || endMs <= startMs) return null
 
       return {
         id: `subtitle_${String(index + 1).padStart(2, "0")}`,
@@ -130,9 +170,11 @@ function createSubtitleCuesFromTts(
 function createFallbackSubtitleCues(
   lines: string[],
   durationPreset: VideoDurationPreset,
-  speechRateCharsPerSecond?: number
+  speechRateCharsPerSecond?: number,
+  generatedAudioDurationMs?: number
 ) {
   const presetMs = durationMsByPreset[durationPreset] || 60000
+  const audioMs = Math.max(0, Math.round(Number(generatedAudioDurationMs) || 0))
   const rate =
     typeof speechRateCharsPerSecond === "number" &&
     Number.isFinite(speechRateCharsPerSecond) &&
@@ -141,7 +183,7 @@ function createFallbackSubtitleCues(
       : undefined
   const totalChars = lines.reduce((sum, text) => sum + cueCharLength(text), 0)
   const speechMs = rate ? Math.round((totalChars / rate) * 1000) : presetMs
-  const totalMs = Math.max(1, Math.min(presetMs, speechMs))
+  const totalMs = audioMs || Math.max(1, Math.min(presetMs, speechMs))
   let cursorMs = 0
 
   return lines.map((text, index) => {
@@ -196,8 +238,11 @@ export function createVoicePlanFromScript({
   script,
   durationPreset,
   audioFilename = "voice.wav",
+  audioFile,
+  includePlaceholderAudio = true,
   ttsCues,
   speechRateCharsPerSecond,
+  generatedAudioDurationMs,
 }: CreateVoicePlanFromScriptInput): VoicePlan {
   const lines = splitScript(script)
   const ttsSubtitles = createSubtitleCuesFromTts(ttsCues)
@@ -206,14 +251,18 @@ export function createVoicePlanFromScript({
     : createFallbackSubtitleCues(
         lines,
         durationPreset,
-        speechRateCharsPerSecond
+        speechRateCharsPerSecond,
+        generatedAudioDurationMs
       )
+  const audio =
+    audioFile ||
+    (includePlaceholderAudio ? createVoiceFileRef(taskId, audioFilename) : undefined)
 
   return {
     text: ttsSubtitles.length
       ? ttsSubtitles.map((cue) => cue.text).join("\n")
       : lines.join("\n"),
-    audio: createVoiceFileRef(taskId, audioFilename),
+    audio,
     subtitles,
   }
 }

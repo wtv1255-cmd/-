@@ -16,6 +16,7 @@ import {
   Search,
   Sparkles,
   SquareStop,
+  Trash2,
   UploadCloud,
   X,
 } from "lucide-react"
@@ -52,6 +53,7 @@ import {
 import {
   createTaskFileRef,
   createVideoTaskSnapshot,
+  deleteVideoTaskSnapshot,
   readVideoTaskSnapshot,
   saveVideoTaskSnapshot,
   type StoryboardShot,
@@ -94,6 +96,7 @@ import {
   normalizeExternalMaterialLabels,
   prepareStickmanRegenerationBatch,
   removeVideoAssetFromInventory,
+  validateGeneratedImageAspectRatio,
   type ExternalMaterialLabelId,
   type VideoImageGenerationRequest,
   type VideoImageGenerationPresetId,
@@ -156,8 +159,57 @@ import {
   type ViralSourceCollectionMode,
 } from "@/lib/video-source-adapters"
 import { imageSourceToBlob } from "@/lib/local-image-library"
+import {
+  appendVideoTaskRunEvent,
+  createVideoTaskRunEvent,
+  createVideoTaskRunSummary,
+  type VideoTaskRunEvent,
+  type VideoTaskRunStage,
+  type VideoTaskRunState,
+  type VideoTaskRunSummary,
+} from "@/lib/video-task-progress"
 
 const STICKMAN_IMAGE_CONCURRENCY = 8
+
+function mimeTypeForAudioFilename(filename: string) {
+  const lower = filename.toLowerCase()
+  if (lower.endsWith(".mp3")) return "audio/mpeg"
+  if (lower.endsWith(".m4a")) return "audio/mp4"
+  if (lower.endsWith(".aac")) return "audio/aac"
+  if (lower.endsWith(".ogg")) return "audio/ogg"
+  if (lower.endsWith(".flac")) return "audio/flac"
+  return "audio/wav"
+}
+
+function durationMsFromPreset(preset: VideoDurationPreset) {
+  if (preset === "30-45s") return 45000
+  if (preset === "45-60s") return 60000
+  if (preset === "60-90s") return 90000
+  return 120000
+}
+
+async function readImageBlobDimensions(blob: Blob) {
+  if (typeof createImageBitmap === "function") {
+    const bitmap = await createImageBitmap(blob)
+    const dimensions = { width: bitmap.width, height: bitmap.height }
+    bitmap.close()
+    return dimensions
+  }
+
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image()
+    const url = URL.createObjectURL(blob)
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error("无法读取图片尺寸"))
+    }
+    image.src = url
+  })
+}
 
 type StickmanGenerationQueueState = {
   pending: StoryboardShot[]
@@ -209,11 +261,38 @@ const materialIntentRules: Array<{
   { labelId: "emotion_boost", patterns: [/情绪|冲突|痛点|震惊|共鸣/i] },
 ]
 
+function isVideoTaskRunEvent(value: unknown): value is VideoTaskRunEvent {
+  if (!value || typeof value !== "object") return false
+  const event = value as Partial<VideoTaskRunEvent>
+  return Boolean(
+    event.id &&
+      event.taskId &&
+      event.at &&
+      event.stage &&
+      event.state &&
+      typeof event.message === "string"
+  )
+}
+
+function isVideoTaskRunSummary(value: unknown): value is VideoTaskRunSummary {
+  if (!value || typeof value !== "object") return false
+  const summary = value as Partial<VideoTaskRunSummary>
+  return Boolean(
+    summary.taskId &&
+      summary.stage &&
+      summary.state &&
+      typeof summary.message === "string" &&
+      typeof summary.progress === "number"
+  )
+}
+
 function createRecoveryPlanFromSnapshot(snapshot: VideoTaskSnapshot) {
   const imageAssetIds = snapshot.assets
     .filter((asset) => asset.kind === "stickman_image")
     .map((asset) => asset.id)
-  const voiceAssetIds = snapshot.voice.audio ? [snapshot.voice.audio.id] : []
+  const realVoiceAssetIds = snapshot.assets
+    .filter((asset) => asset.kind === "voice_audio" && asset.file?.path)
+    .map((asset) => asset.id)
   const subtitleIds = snapshot.voice.subtitles.map((cue) => cue.id)
   const draftAssetIds = snapshot.assets
     .filter((asset) => asset.kind === "jianying_draft")
@@ -228,8 +307,8 @@ function createRecoveryPlanFromSnapshot(snapshot: VideoTaskSnapshot) {
       },
       {
         id: "tts",
-        state: voiceAssetIds.length ? "success" : "waiting",
-        assetIds: voiceAssetIds,
+        state: realVoiceAssetIds.length ? "success" : "waiting",
+        assetIds: realVoiceAssetIds,
       },
       {
         id: "subtitles",
@@ -251,7 +330,7 @@ function createRecoveryPlanFromSnapshot(snapshot: VideoTaskSnapshot) {
 
   return planVideoTaskRecovery(recoverySnapshot, {
     hasApiBackup: true,
-    localTtsAvailable: Boolean(snapshot.voice.audio),
+    localTtsAvailable: Boolean(realVoiceAssetIds.length),
   })
 }
 
@@ -260,8 +339,12 @@ async function runRecoveryStepFromSnapshot(
   step: VideoProductionStep
 ) {
   if (step.id === "tts") {
-    return snapshot.voice.audio
-      ? { ok: true, assetIds: [snapshot.voice.audio.id] }
+    const realVoiceAssetIds = snapshot.assets
+      .filter((asset) => asset.kind === "voice_audio" && asset.file?.path)
+      .map((asset) => asset.id)
+
+    return realVoiceAssetIds.length
+      ? { ok: true, assetIds: realVoiceAssetIds }
       : { ok: false, reason: "local_tts_unavailable" }
   }
   if (step.id === "subtitles") {
@@ -602,6 +685,9 @@ function VideoFactoryShell() {
   const [aiDirectorStatus, setAiDirectorStatus] =
     useState("AI 剪辑决策未生成")
   const [isGeneratingAiDirector, setIsGeneratingAiDirector] = useState(false)
+  const [taskRunEvents, setTaskRunEvents] = useState<VideoTaskRunEvent[]>([])
+  const [taskRunSummary, setTaskRunSummary] =
+    useState<VideoTaskRunSummary | null>(null)
   const [toast, setToast] = useState("")
   const autoPublishEnabled = hasLicenseFeature(license.result, "auto_publish")
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0]
@@ -660,9 +746,30 @@ function VideoFactoryShell() {
         setVoicePlan(null)
         setVideoTimeline(null)
         setDraftPlan(null)
+        setTaskRunEvents([])
+        setTaskRunSummary(null)
         return
       }
       const snapshot = readVideoTaskSnapshot(activeTask.id)
+      const restoredEvents =
+        await window.promptCenterDesktop?.readTaskRunEvents?.({
+          taskId: activeTask.id,
+        })
+      const restoredSummary =
+        await window.promptCenterDesktop?.readTaskRunSummary?.({
+          taskId: activeTask.id,
+        })
+      const nextRunEvents = Array.isArray(restoredEvents?.events)
+        ? restoredEvents.events.filter(isVideoTaskRunEvent)
+        : []
+      setTaskRunEvents(nextRunEvents)
+      setTaskRunSummary(
+        restoredSummary?.summary && isVideoTaskRunSummary(restoredSummary.summary)
+          ? restoredSummary.summary
+          : nextRunEvents.length
+            ? createVideoTaskRunSummary(nextRunEvents)
+            : null
+      )
       const recovery = snapshot
         ? await executeVideoTaskRecovery(createRecoveryPlanFromSnapshot(snapshot), {
             runStep: (step) => runRecoveryStepFromSnapshot(snapshot, step),
@@ -698,6 +805,11 @@ function VideoFactoryShell() {
               status: "created",
               defaultOutputKind: "jianying_draft",
               mp4ExportDefault: false,
+              canvas: {
+                aspectRatio: "9:16",
+                width: 1080,
+                height: 1920,
+              },
               output: restoredDraftAsset,
               previewPath: restoredDraftAsset.file.path,
               command: "",
@@ -747,6 +859,59 @@ function VideoFactoryShell() {
       alive = false
     }
   }, [activeTask?.id, activeTask?.title])
+
+  const reportTaskProgress = async (input: {
+    taskId?: string
+    stage: VideoTaskRunStage
+    state: VideoTaskRunState
+    message: string
+    current?: number
+    total?: number
+    progress?: number
+    artifact?: VideoTaskRunEvent["artifact"]
+    error?: VideoTaskRunEvent["error"]
+  }) => {
+    const taskId = input.taskId || activeTask?.id
+    if (!taskId) return
+
+    const fallbackEvent = createVideoTaskRunEvent({
+      ...input,
+      taskId,
+    })
+
+    setTaskRunEvents((current) => {
+      const nextEvents = appendVideoTaskRunEvent(current, fallbackEvent)
+      setTaskRunSummary(createVideoTaskRunSummary(nextEvents))
+      return nextEvents
+    })
+
+    const result = await window.promptCenterDesktop?.appendTaskRunEvent?.({
+      taskId,
+      stage: input.stage,
+      state: input.state,
+      message: input.message,
+      current: input.current,
+      total: input.total,
+      progress: input.progress,
+      artifact: input.artifact,
+      error: input.error,
+    })
+
+    if (!result?.ok) return
+    const persistedEvent = result.event
+    if (isVideoTaskRunEvent(persistedEvent)) {
+      setTaskRunEvents((current) => {
+        const withoutFallback = current.filter(
+          (event) => event.id !== fallbackEvent.id
+        )
+        return appendVideoTaskRunEvent(withoutFallback, persistedEvent)
+      })
+    }
+    const persistedSummary = result.summary
+    if (isVideoTaskRunSummary(persistedSummary)) {
+      setTaskRunSummary(persistedSummary)
+    }
+  }
 
   const persistTasks = (nextTasks: VideoTask[], nextActiveId?: string) => {
     setTasks(nextTasks)
@@ -823,7 +988,7 @@ function VideoFactoryShell() {
       const profile = resolveApiProfile(apiProfiles, "cloud_tts")
       setTtsStatus(
         profile.apiKey.trim()
-          ? `云端 TTS 已配置：${profile.label} · ${profile.model}`
+          ? `云端 TTS Profile 已配置：${profile.label} · ${profile.model}；当前版本尚未自动合成音频`
           : "云端 TTS Profile 未配置 API Key"
       )
       return
@@ -837,7 +1002,7 @@ function VideoFactoryShell() {
       return
     }
     if (result.ok) {
-      setTtsStatus(`已找到本地 TTS：${result.projectPath}`)
+      setTtsStatus(`已找到本地 TTS：${result.projectPath}；当前版本尚未自动合成音频`)
       return
     }
     const missing = Array.isArray(result.missing)
@@ -894,7 +1059,46 @@ function VideoFactoryShell() {
       })
     )
     persistTasks([task, ...tasks], task.id)
+    void reportTaskProgress({
+      taskId: task.id,
+      stage: "source",
+      state: "queued",
+      message: "已创建视频任务，等待输入来源或文案",
+      progress: 0,
+    })
     setToast("已创建视频任务")
+  }
+
+  const deleteVideoTask = async (taskId: string) => {
+    const targetTask = tasks.find((task) => task.id === taskId)
+    if (!targetTask) return
+
+    const confirmed = window.confirm(
+      `删除任务「${targetTask.title}」？\n\n仅删除她火本地缓存和任务记录，图片、音频等缓存会跟随删除；剪映草稿不会删除。`
+    )
+    if (!confirmed) return
+
+    const result = await window.promptCenterDesktop?.deleteTaskCache?.({ taskId })
+    if (result && !result.ok) {
+      setToast(result.error || "任务缓存删除失败")
+      return
+    }
+
+    deleteVideoTaskSnapshot(taskId)
+    const nextTasks = tasks.filter((task) => task.id !== taskId)
+    const nextActiveId =
+      taskId === activeTaskId ? nextTasks[0]?.id || "" : activeTaskId
+
+    persistTasks(nextTasks, nextActiveId)
+    if (!nextActiveId) {
+      setAnalysisDraft(null)
+      setStoryboardShots([])
+      setVideoAssets([])
+      setVoicePlan(null)
+      setVideoTimeline(null)
+      setDraftPlan(null)
+    }
+    setToast("任务已删除，剪映草稿未删除")
   }
 
   const updateActiveTaskSnapshot = (
@@ -1078,6 +1282,13 @@ function VideoFactoryShell() {
       sourceLabel: "用户粘贴脚本",
     })
     applyScriptDraft(draft, `原文直通：${draft.sentenceTimeline.length} 句`)
+    void reportTaskProgress({
+      stage: "script",
+      state: "success",
+      message: `用户跳过模型生成，使用原文直通：${draft.sentenceTimeline.length} 句`,
+      current: 1,
+      total: 1,
+    })
     setToast("已直通粘贴脚本，可继续分镜")
   }
 
@@ -1100,6 +1311,13 @@ function VideoFactoryShell() {
     let failoverSummary = "文本路由：未执行"
 
     setIsGeneratingAnalysis(true)
+    await reportTaskProgress({
+      stage: "script",
+      state: "running",
+      message: `正在请求文本模型 ${effectiveRewriteMode}`,
+      current: 0,
+      total: 1,
+    })
     try {
       const failoverResult = await runApiProfileFailover(
         failoverPlan,
@@ -1107,7 +1325,7 @@ function VideoFactoryShell() {
           const request = buildScriptGenerationRequest({
             profile: requestContextFromAttempt(attempt),
             sourceText: analysisTopic,
-            durationPreset: "45-60s",
+            durationPreset: selectedDuration,
             packageId: "stickman_meme",
             rewriteMode: effectiveRewriteMode,
             copywritingBoard: effectiveCopywritingBoard,
@@ -1117,16 +1335,42 @@ function VideoFactoryShell() {
         }
       )
       failoverSummary = formatApiFailoverSummary("文本路由", failoverResult)
+      if (failoverResult.state.failedAttempts.length > 0) {
+        await reportTaskProgress({
+          stage: "script",
+          state: "fallback",
+          message: `文本模型主接口失败，已尝试备用 API：${failoverResult.state.failedAttempts
+            .map((attempt) => attempt.profileId)
+            .join("、")}`,
+        })
+      }
 
       if (failoverResult.ok) {
         draft = createModelVideoAnalysisDraft({
           sourceText: analysisTopic,
           modelText: failoverResult.value,
         })
+        await reportTaskProgress({
+          stage: "script",
+          state: "success",
+          message: `文案生成完成，已保存 ${draft.originalScript.length} 字`,
+          current: 1,
+          total: 1,
+        })
       } else {
         draft = createScriptGenerationFailureDraft({
           sourceText: analysisTopic,
           reason: failoverResult.state.pauseReason || failoverResult.error,
+        })
+        await reportTaskProgress({
+          stage: "script",
+          state: "failed",
+          message: `文案生成失败：${failoverResult.state.pauseReason || failoverResult.error}`,
+          error: {
+            code: "script_generation_failed",
+            message: failoverResult.state.pauseReason || failoverResult.error,
+            retryable: false,
+          },
         })
       }
     } finally {
@@ -1266,6 +1510,13 @@ function VideoFactoryShell() {
   const stopStickmanGeneration = () => {
     stopStickmanGenerationRef.current = true
     stickmanGenerationQueueRef.current.stopRequested = true
+    void reportTaskProgress({
+      stage: "images",
+      state: "warning",
+      message: "用户请求停止图片生成，已发出的请求会先返回",
+      current: stickmanGenerationQueueRef.current.completed,
+      total: stickmanGenerationQueueRef.current.total,
+    })
     setStickmanProgress("正在停止，已发出的请求会先返回")
     setToast("已请求停止生成")
   }
@@ -1517,6 +1768,13 @@ function VideoFactoryShell() {
 
     stopStickmanGenerationRef.current = false
     setIsGeneratingStickmanImages(true)
+    void reportTaskProgress({
+      stage: "images",
+      state: "queued",
+      message: `图片生成队列已排队：${queue.total} 张，并发 ${STICKMAN_IMAGE_CONCURRENCY}`,
+      current: queue.completed,
+      total: queue.total,
+    })
     syncStickmanQueueStatus()
     updateStickmanQueueProgress()
     pumpStickmanGenerationQueue()
@@ -1534,6 +1792,14 @@ function VideoFactoryShell() {
         throw new Error("请先创建视频任务")
       }
       updateProgress(` · ${shot.id}`)
+      await reportTaskProgress({
+        taskId,
+        stage: "images",
+        state: "running",
+        message: `正在生成第 ${queue.completed + 1}/${queue.total} 张火柴人图：${shot.id}`,
+        current: queue.completed + 1,
+        total: queue.total,
+      })
       setToast(`正在生成火柴人图：${shot.id}`)
       const failoverResult = await runApiProfileFailover(
         failoverPlan,
@@ -1554,18 +1820,41 @@ function VideoFactoryShell() {
         "图片路由",
         failoverResult
       )
+      if (failoverResult.state.failedAttempts.length > 0) {
+        await reportTaskProgress({
+          taskId,
+          stage: "images",
+          state: "fallback",
+          message: `图片主接口失败，切换备用图片 API：${failoverResult.state.failedAttempts
+            .map((attempt) => attempt.profileId)
+            .join("、")}`,
+          current: queue.completed,
+          total: queue.total,
+        })
+      }
       if (!failoverResult.ok) {
         throw new Error(failoverSummary)
       }
       const result = failoverResult.value
+      const imageBlob = await imageSourceToBlob(result.image)
+      const { width: imageWidth, height: imageHeight } =
+        await readImageBlobDimensions(imageBlob)
+      const aspectRatioCheck = validateGeneratedImageAspectRatio({
+        width: imageWidth,
+        height: imageHeight,
+        settings: imageGenerationSettings,
+      })
+      if (!aspectRatioCheck.ok) {
+        throw new Error(
+          `图片画幅不匹配：当前选择 ${aspectRatioCheck.expectedAspectRatio}，接口返回 ${aspectRatioCheck.actualAspectRatio}。请重新生成或切换图片路由。`
+        )
+      }
       const saved = await window.promptCenterDesktop?.saveTaskAssetFile?.({
         taskId,
         kind: result.asset.kind,
         filename: result.asset.file.filename,
         mimeType: result.image.mimeType || result.asset.file.mimeType,
-        data: await imageSourceToBlob(result.image).then((blob) =>
-          blob.arrayBuffer()
-        ),
+        data: await imageBlob.arrayBuffer(),
       })
       if (!saved?.ok) {
         throw new Error(saved?.error || "保存火柴人图失败")
@@ -1589,10 +1878,14 @@ function VideoFactoryShell() {
               mimeType: saved.mimeType || result.asset.file.mimeType,
             },
             previewUrl: preview,
+            width: imageWidth,
+            height: imageHeight,
           }
         : {
             ...result.asset,
             previewUrl: preview,
+            width: imageWidth,
+            height: imageHeight,
           }
       const record: VideoTaskSnapshot["records"][number] = {
         id: `asset_${shot.id}_${Date.now()}`,
@@ -1606,6 +1899,19 @@ function VideoFactoryShell() {
         item.tags?.includes(shot.id)
 
       queue.completed += 1
+      await reportTaskProgress({
+        taskId,
+        stage: "images",
+        state: "artifact",
+        message: `已保存 ${shot.id} 火柴人图：${asset.file.filename}`,
+        current: queue.completed,
+        total: queue.total,
+        artifact: {
+          kind: "stickman_image",
+          path: asset.file.path,
+          label: asset.displayName,
+        },
+      })
       setVideoAssets((current) => [
         asset,
         ...current.filter((item) => !isSameShotGeneratedImage(item)),
@@ -1642,6 +1948,21 @@ function VideoFactoryShell() {
     } catch (error) {
       queue.failed += 1
       const message = error instanceof Error ? error.message : "生成火柴人图失败"
+      await reportTaskProgress({
+        taskId: activeTask?.id,
+        stage: "images",
+        state: "failed",
+        message: `图片生成失败：${shot.id} · ${message}`,
+        current: queue.completed,
+        total: queue.total,
+        error: {
+          code: "stickman_image_failed",
+          message,
+          retryable: !/余额不足|insufficient|quota|credits?|balance/i.test(
+            message
+          ),
+        },
+      })
       if (/余额不足|insufficient|quota|credits?|balance/i.test(message)) {
         queue.fatalError = new Error(message)
         queue.pending = []
@@ -1738,6 +2059,14 @@ function VideoFactoryShell() {
 
   const createDesktopJianyingDraft = async (plan: JianyingDraftPlan) => {
     const desktopDraft = window.promptCenterDesktop?.createJianyingDraft
+    await reportTaskProgress({
+      taskId: plan.taskId,
+      stage: "draft",
+      state: "running",
+      message: "正在写入剪映草稿",
+      current: 0,
+      total: 1,
+    })
     const draftResult =
       plan.status === "ready" && desktopDraft
         ? await desktopDraft({ plan })
@@ -1760,6 +2089,40 @@ function VideoFactoryShell() {
         : draftResult?.ok
           ? `剪映草稿包已创建：${draftOutput.file.path}`
           : ""
+    if (draftResult?.ok) {
+      await reportTaskProgress({
+        taskId: plan.taskId,
+        stage: "draft",
+        state: "artifact",
+        message: createdMessage || `剪映草稿已写入 ${draftOutput.file.path}`,
+        current: 1,
+        total: 1,
+        artifact: {
+          kind: "jianying_draft",
+          path: draftOutput.file.path,
+          label: "剪映草稿",
+        },
+      })
+    } else if (draftResult?.error) {
+      await reportTaskProgress({
+        taskId: plan.taskId,
+        stage: "draft",
+        state: "failed",
+        message: `剪映草稿创建失败：${draftResult.error}`,
+        error: {
+          code: "jianying_draft_failed",
+          message: draftResult.error,
+          retryable: true,
+        },
+      })
+    } else if (!desktopDraft) {
+      await reportTaskProgress({
+        taskId: plan.taskId,
+        stage: "draft",
+        state: "warning",
+        message: "当前浏览器环境仅生成草稿计划，桌面端会创建剪映草稿包",
+      })
+    }
 
     return {
       draftResult,
@@ -1810,6 +2173,7 @@ function VideoFactoryShell() {
       taskId: activeTask.id,
       timeline,
       materialAssets,
+      canvasAspectRatio: imageGenerationSettings.aspectRatio,
     })
     const { draftResult, nextPlan } = await createDesktopJianyingDraft(plan)
     const output = {
@@ -1867,7 +2231,7 @@ function VideoFactoryShell() {
     )
   }
 
-  const assembleTimeline = () => {
+  const assembleTimeline = async () => {
     if (!activeTask || !analysisDraft) {
       setToast("请先创建任务并生成脚本")
       return
@@ -1877,22 +2241,241 @@ function VideoFactoryShell() {
       return
     }
 
+    let voiceAsset: VideoAsset | null = null
+    let generatedAudioDurationMs: number | undefined
+    let realAudioFile:
+      | ReturnType<typeof createTaskFileRef>
+      | (ReturnType<typeof createTaskFileRef> & { path: string })
+      | undefined
     const manualAudioFilename =
       ttsSettings.manualAudioPath.split(/[\\/]/u).pop() || "manual-audio.wav"
-    const voiceAudioFilename =
+    const selectedVoice = resolveVideoTtsVoiceSelection({
+      settings: ttsSettings,
+      taskVoicePresetId,
+    })
+    let voiceAudioFilename =
       ttsSettings.engine === "manual_audio"
         ? manualAudioFilename
         : ttsSettings.engine === "cloud_tts"
           ? "cloud-tts.wav"
-          : `${resolveVideoTtsVoiceSelection({
-              settings: ttsSettings,
-              taskVoicePresetId,
-            }).id}.wav`
-    const voice = createVoicePlanFromScript({
+          : `${selectedVoice.id}.wav`
+
+    await reportTaskProgress({
+      stage: "voice",
+      state: "running",
+      message:
+        ttsSettings.engine === "local_indextts2"
+          ? "IndexTTS2 准备检测参考音频并合成旁白"
+          : ttsSettings.engine === "manual_audio"
+            ? "准备复制手动配音文件并生成字幕"
+            : "云端 TTS 准备检查配置",
+      current: 0,
+      total: 1,
+    })
+
+    if (ttsSettings.engine === "local_indextts2") {
+      if (!ttsSettings.referenceAudioPath) {
+        await reportTaskProgress({
+          stage: "voice",
+          state: "needs_manual",
+          message: "IndexTTS2 暂停：请先选择参考音频 / 音色样本",
+          error: {
+            code: "tts_reference_audio_missing",
+            message: "请先选择参考音频 / 音色样本",
+            retryable: false,
+          },
+        })
+        setToast("请先选择参考音频 / 音色样本")
+        return
+      }
+      if (!window.promptCenterDesktop?.synthesizeLocalTts) {
+        await reportTaskProgress({
+          stage: "voice",
+          state: "failed",
+          message: "IndexTTS2 合成失败：当前环境无法调用桌面端 TTS",
+          error: {
+            code: "desktop_tts_unavailable",
+            message: "当前环境无法调用本地 IndexTTS2",
+            retryable: false,
+          },
+        })
+        setToast("当前环境无法调用本地 IndexTTS2")
+        return
+      }
+
+      setTtsStatus("正在用参考音频克隆整篇文案")
+      setToast("正在用参考音频生成完整旁白")
+      await reportTaskProgress({
+        stage: "voice",
+        state: "running",
+        message: "IndexTTS2 正在用参考音频克隆解说",
+        current: 0,
+        total: 1,
+      })
+      const synthesized = await window.promptCenterDesktop.synthesizeLocalTts({
+        taskId: activeTask.id,
+        text: analysisDraft.originalScript,
+        projectPath: ttsSettings.projectPath,
+        referenceAudioPath: ttsSettings.referenceAudioPath,
+        outputFilename: voiceAudioFilename,
+        launchArgs: ttsSettings.launchArgs,
+        maxTextTokensPerSegment: 120,
+      })
+      if (!synthesized?.ok || !synthesized.filePath || !synthesized.filename) {
+        const error = synthesized?.error || "本地 IndexTTS2 合成失败"
+        await reportTaskProgress({
+          stage: "voice",
+          state: "failed",
+          message: `IndexTTS2 合成失败：${error}`,
+          error: {
+            code: "local_indextts2_failed",
+            message: error,
+            retryable: true,
+          },
+        })
+        setTtsStatus(error)
+        setToast(error)
+        return
+      }
+
+      voiceAudioFilename = synthesized.filename
+      generatedAudioDurationMs = synthesized.durationMs
+      const audioFile = createTaskFileRef({
+        taskId: activeTask.id,
+        kind: "voice_audio",
+        filename: synthesized.filename,
+        bytes: synthesized.bytes,
+        mimeType:
+          synthesized.mimeType || mimeTypeForAudioFilename(synthesized.filename),
+      })
+      realAudioFile = {
+        ...audioFile,
+        path: synthesized.filePath,
+      }
+      voiceAsset = {
+        id: realAudioFile.id,
+        kind: "voice_audio",
+        displayName: realAudioFile.filename,
+        file: realAudioFile,
+        durationMs: synthesized.durationMs,
+        tags: ["local_indextts2", "reference_audio_clone", "voice_audio"],
+      }
+      setTtsStatus(
+        `已生成克隆旁白：${synthesized.filename}${
+          synthesized.durationMs ? ` · ${synthesized.durationMs}ms` : ""
+        }`
+      )
+      await reportTaskProgress({
+        stage: "voice",
+        state: "success",
+        message: `IndexTTS2 合成成功：${synthesized.filename}`,
+        current: 1,
+        total: 1,
+        artifact: {
+          kind: "voice_audio",
+          path: synthesized.filePath,
+          label: synthesized.filename,
+        },
+      })
+    }
+
+    if (ttsSettings.engine === "manual_audio" && ttsSettings.manualAudioPath) {
+      const copied = await window.promptCenterDesktop?.copyTaskAssetFile?.({
+        taskId: activeTask.id,
+        kind: "voice_audio",
+        sourcePath: ttsSettings.manualAudioPath,
+        filename: manualAudioFilename,
+        mimeType: mimeTypeForAudioFilename(manualAudioFilename),
+      })
+      if (!copied?.ok || !copied.filePath || !copied.filename) {
+        await reportTaskProgress({
+          stage: "voice",
+          state: "failed",
+          message: `手动配音文件复制失败：${copied?.error || "未知错误"}`,
+          error: {
+            code: "manual_audio_copy_failed",
+            message: copied?.error || "手动配音文件复制失败",
+            retryable: true,
+          },
+        })
+        setToast(copied?.error || "手动配音文件复制失败")
+        return
+      }
+
+      const audioFile = createTaskFileRef({
+        taskId: activeTask.id,
+        kind: "voice_audio",
+        filename: copied.filename,
+        bytes: copied.bytes,
+        mimeType: copied.mimeType || mimeTypeForAudioFilename(copied.filename),
+      })
+      realAudioFile = {
+        ...audioFile,
+        path: copied.filePath,
+      }
+      voiceAsset = {
+        id: realAudioFile.id,
+        kind: "voice_audio",
+        displayName: realAudioFile.filename,
+        file: realAudioFile,
+        tags: ["manual_audio", "voice_audio"],
+      }
+      await reportTaskProgress({
+        stage: "voice",
+        state: "success",
+        message: `手动配音已加入：${copied.filename}`,
+        current: 1,
+        total: 1,
+        artifact: {
+          kind: "voice_audio",
+          path: copied.filePath,
+          label: copied.filename,
+        },
+      })
+    }
+    if (ttsSettings.engine === "cloud_tts") {
+      await reportTaskProgress({
+        stage: "voice",
+        state: "needs_manual",
+        message: "云端 TTS 还没有接真实合成接口，请先用本地 IndexTTS2 或手动音频",
+        error: {
+          code: "cloud_tts_not_wired",
+          message: "云端 TTS 当前是配置预留",
+          retryable: false,
+        },
+      })
+      setToast("云端 TTS 还没有接真实合成接口，请先用本地 IndexTTS2 或手动音频")
+      return
+    }
+
+    const voiceWithAudio = createVoicePlanFromScript({
       taskId: activeTask.id,
       script: analysisDraft.originalScript,
       durationPreset: selectedDuration,
+      generatedAudioDurationMs,
       audioFilename: voiceAudioFilename,
+      audioFile: realAudioFile,
+      includePlaceholderAudio: false,
+    })
+    const cueCount = Math.max(1, voiceWithAudio.subtitles.length)
+    const timelineDurationMs =
+      generatedAudioDurationMs ||
+      voiceWithAudio.subtitles.at(-1)?.endMs ||
+      durationMsFromPreset(selectedDuration)
+    const shotDurationMs = Math.max(1, Math.floor(timelineDurationMs / cueCount))
+    const alignedStoryboardShots = storyboardShots.map((shot, index) => {
+      const cue = voiceWithAudio.subtitles[index]
+      const startMs = cue?.startMs ?? index * shotDurationMs
+      const endMs =
+        cue?.endMs ??
+        (index === storyboardShots.length - 1
+          ? timelineDurationMs
+          : Math.min(timelineDurationMs, (index + 1) * shotDurationMs))
+      return {
+        ...shot,
+        startMs,
+        endMs: Math.max(startMs + 1, endMs),
+      }
     })
     const visualAssets = videoAssets.filter((asset) =>
       ["stickman_image", "yanling_clip", "showcase_clip"].includes(asset.kind)
@@ -1918,7 +2501,7 @@ function VideoFactoryShell() {
       })
       .filter((asset): asset is VideoAsset => Boolean(asset))
     const timelineExternalAssets = [...visualAssets, ...placeholderAssets]
-    const storyboard = storyboardShots.map((shot, index) => {
+    const storyboard = alignedStoryboardShots.map((shot, index) => {
       const requiredMaterialLabel = inferRequiredMaterialLabel(shot)
       return {
         id: shot.id,
@@ -1936,7 +2519,7 @@ function VideoFactoryShell() {
     })
     const timeline = createUnifiedVideoTimeline({
       taskId: activeTask.id,
-      voice,
+      voice: voiceWithAudio,
       storyboard,
       externalAssets: timelineExternalAssets,
       bgmAssetId: videoAssets.find((asset) => asset.kind === "bgm")?.id,
@@ -1945,7 +2528,24 @@ function VideoFactoryShell() {
         .map((asset) => asset.id),
       previousTimeline: videoTimeline || undefined,
     })
+    await reportTaskProgress({
+      stage: "subtitles",
+      state: "success",
+      message: `字幕已对齐：${voiceWithAudio.subtitles.length} 条`,
+      current: voiceWithAudio.subtitles.length,
+      total: voiceWithAudio.subtitles.length,
+    })
+    await reportTaskProgress({
+      stage: "timeline",
+      state: "success",
+      message: `时间线组装完成：${timeline.durationMs}ms · ${timeline.tracks.length} tracks`,
+      current: timeline.tracks.length,
+      total: timeline.tracks.length,
+    })
     const nextAssets = [
+      ...(voiceAsset && !videoAssets.some((asset) => asset.id === voiceAsset.id)
+        ? [voiceAsset]
+        : []),
       ...placeholderAssets.filter(
         (placeholder) =>
           !videoAssets.some((asset) => asset.id === placeholder.id)
@@ -1953,21 +2553,27 @@ function VideoFactoryShell() {
       ...videoAssets,
     ]
 
-    setVoicePlan(voice)
+    setVoicePlan(voiceWithAudio)
     setVideoTimeline(timeline)
-    if (placeholderAssets.length) {
+    setStoryboardShots(alignedStoryboardShots)
+    if (placeholderAssets.length || voiceAsset) {
       setVideoAssets(nextAssets)
     }
     updateActiveTaskSnapshot((snapshot) => ({
       ...snapshot,
       assets: [
+        ...(voiceAsset &&
+        !snapshot.assets.some((asset) => asset.id === voiceAsset.id)
+          ? [voiceAsset]
+          : []),
         ...placeholderAssets.filter(
           (placeholder) =>
             !snapshot.assets.some((asset) => asset.id === placeholder.id)
         ),
         ...snapshot.assets,
       ],
-      voice,
+      storyboard: alignedStoryboardShots,
+      voice: voiceWithAudio,
       timeline,
       records: [
         ...snapshot.records,
@@ -1975,11 +2581,21 @@ function VideoFactoryShell() {
           id: `timeline_${Date.now()}`,
           at: new Date().toISOString(),
           kind: "timeline_assembled",
-          message: `时间线已装配：${timeline.durationMs}ms · ${timeline.tracks.length} tracks · ${ttsSettings.engine === "cloud_tts" ? "云端 TTS 配置预留" : ttsSettings.engine === "manual_audio" ? "手动音频引用" : "本地 TTS 音色引用"} · TTS timestamps 缺失时使用句子级 fallback timing`,
+          message: `时间线已装配：${timeline.durationMs}ms · ${timeline.tracks.length} tracks · ${
+            voiceWithAudio.audio
+              ? "真实配音文件已加入"
+              : ttsSettings.engine === "manual_audio"
+                ? "未选择手动配音文件"
+                : "TTS 仅配置预留，未生成真实音频"
+          } · TTS timestamps 缺失时使用句子级 fallback timing`,
         },
       ],
     }))
-    setToast("已生成配音、字幕和统一时间线")
+    setToast(
+      voiceWithAudio.audio
+        ? "已生成字幕、真实配音引用和统一时间线"
+        : "已生成字幕和统一时间线，未生成真实配音"
+    )
   }
 
   const prepareRenderExport = async () => {
@@ -1994,6 +2610,7 @@ function VideoFactoryShell() {
       aiDirectorPlan: aiDirectorPlan || undefined,
       materialAssets: videoAssets,
       copywritingBoard: scriptCopywritingBoard,
+      canvasAspectRatio: imageGenerationSettings.aspectRatio,
     })
     const withoutPreviousDraftPlan = (assets: VideoAsset[]) =>
       assets.filter((asset) => !asset.tags?.includes("editable_draft_plan"))
@@ -2045,6 +2662,7 @@ function VideoFactoryShell() {
       timeline: videoTimeline,
       materialAssets: videoAssets,
       copywritingBoard: scriptCopywritingBoard,
+      canvasAspectRatio: imageGenerationSettings.aspectRatio,
     })
     const failoverPlan = createModuleFailoverPlan(apiProfiles, "edit_director")
     const failoverLogEntry = createApiFailoverLogEntry(failoverPlan)
@@ -2222,11 +2840,27 @@ function VideoFactoryShell() {
       </header>
 
       <div className="mx-auto grid max-w-7xl gap-5 p-6 max-lg:p-4">
-        <section className="grid grid-cols-[minmax(0,1fr)_340px] gap-5 max-xl:grid-cols-1">
+        <section className="grid grid-cols-[minmax(0,1fr)_360px] gap-5 max-xl:grid-cols-1">
           <div className="grid gap-5">
             <VideoFactoryModuleNav
               activeModule={activeModule}
               onChange={setActiveModule}
+            />
+            <TaskProgressHeader
+              task={activeTask}
+              summary={taskRunSummary}
+              eventCount={taskRunEvents.length}
+            />
+            <ModuleProgressStrip
+              moduleId={activeModule}
+              summary={taskRunSummary}
+              storyboardCount={storyboardShots.length}
+              generatedStickmanShotCount={generatedStickmanShotCount}
+              stickmanShotCount={stickmanShotCount}
+              stickmanProgress={stickmanProgress}
+              ttsStatus={ttsStatus}
+              hasTimeline={Boolean(videoTimeline?.tracks.length)}
+              draftPath={draftPlan?.previewPath}
             />
 
             {activeModule === "overview" ? (
@@ -2259,6 +2893,7 @@ function VideoFactoryShell() {
                       activeTaskId={activeTask?.id || ""}
                       onSelectTask={setActiveTaskId}
                       onCreateTask={createTask}
+                      onDeleteTask={deleteVideoTask}
                     />
                     {activeTask ? (
                       <WorkflowShell task={activeTask} />
@@ -2300,12 +2935,14 @@ function VideoFactoryShell() {
                 }
                 copywritingBoard={scriptCopywritingBoard}
                 conversionTheme={scriptConversionTheme}
+                selectedDuration={selectedDuration}
                 showAdvancedRewrite={showAdvancedRewrite}
                 onTopicChange={setAnalysisTopic}
                 onWorkflowModeChange={setScriptWorkflowMode}
                 onRewriteModeChange={setScriptRewriteMode}
                 onCopywritingBoardChange={setScriptCopywritingBoard}
                 onConversionThemeChange={setScriptConversionTheme}
+                onDurationChange={setSelectedDuration}
                 onSaveWorkflowSettings={saveScriptWorkflowPreference}
                 onShowAdvancedRewriteChange={setShowAdvancedRewrite}
                 onUsePastedScript={applyPastedScript}
@@ -2430,6 +3067,11 @@ function VideoFactoryShell() {
           </div>
 
           <aside className="grid content-start gap-4">
+            <TaskRunConsole
+              task={activeTask}
+              summary={taskRunSummary}
+              events={taskRunEvents}
+            />
             <div className="rounded-lg border bg-background p-4">
               <div className="mb-3 flex items-center gap-2">
                 <Clock3 className="size-4 text-muted-foreground" />
@@ -2489,16 +3131,289 @@ function VideoFactoryModuleNav({
   )
 }
 
+function stageLabel(stage?: VideoTaskRunStage) {
+  const labels: Record<VideoTaskRunStage, string> = {
+    source: "来源",
+    script: "文案",
+    storyboard: "分镜",
+    images: "素材生成",
+    voice: "配音",
+    subtitles: "字幕",
+    timeline: "时间线",
+    edit_decision: "AI 精剪",
+    draft: "剪映草稿",
+    quality_check: "质量检查",
+    publish: "发布",
+  }
+  return stage ? labels[stage] : "等待开始"
+}
+
+function stateLabel(state?: VideoTaskRunState) {
+  const labels: Record<VideoTaskRunState, string> = {
+    queued: "排队",
+    running: "运行中",
+    success: "完成",
+    retrying: "重试",
+    fallback: "备用 API",
+    warning: "提醒",
+    failed: "失败",
+    needs_manual: "待人工",
+    artifact: "产物",
+  }
+  return state ? labels[state] : "空闲"
+}
+
+function stateClassName(state?: VideoTaskRunState) {
+  if (state === "success") return "border-emerald-500/30 text-emerald-600"
+  if (state === "artifact") return "border-cyan-500/30 text-cyan-600"
+  if (state === "failed") return "border-red-500/30 text-red-600"
+  if (state === "needs_manual") return "border-orange-500/30 text-orange-600"
+  if (state === "warning" || state === "retrying" || state === "fallback") {
+    return "border-yellow-500/30 text-yellow-600"
+  }
+  if (state === "running") return "border-blue-500/30 text-blue-600"
+  return "border-border text-muted-foreground"
+}
+
+function formatEventTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value.slice(11, 19)
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })
+}
+
+function TaskProgressHeader({
+  task,
+  summary,
+  eventCount,
+}: {
+  task?: VideoTask
+  summary: VideoTaskRunSummary | null
+  eventCount: number
+}) {
+  const progress = Math.round((summary?.progress || 0) * 100)
+  const countText =
+    summary?.current !== undefined && summary?.total !== undefined
+      ? ` · ${summary.current}/${summary.total}`
+      : ""
+  const failureText = summary?.failureCount ? ` · 失败 ${summary.failureCount}` : ""
+
+  return (
+    <section className="rounded-lg border bg-background p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">
+            总进度 {progress}% · {stageLabel(summary?.stage)}
+            {countText}
+            {failureText}
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {task ? summary?.message || "等待任务运行" : "请先新建视频任务"}
+          </p>
+        </div>
+        <span
+          className={`rounded-md border px-2 py-1 text-xs ${stateClassName(
+            summary?.state
+          )}`}
+        >
+          {eventCount ? stateLabel(summary?.state) : "暂无运行日志"}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full bg-primary transition-all"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+    </section>
+  )
+}
+
+function ModuleProgressStrip({
+  moduleId,
+  summary,
+  storyboardCount,
+  generatedStickmanShotCount,
+  stickmanShotCount,
+  stickmanProgress,
+  ttsStatus,
+  hasTimeline,
+  draftPath,
+}: {
+  moduleId: VideoFactoryModuleId
+  summary: VideoTaskRunSummary | null
+  storyboardCount: number
+  generatedStickmanShotCount: number
+  stickmanShotCount: number
+  stickmanProgress: string
+  ttsStatus: string
+  hasTimeline: boolean
+  draftPath?: string
+}) {
+  const textByModule: Record<VideoFactoryModuleId, string> = {
+    overview: summary?.message || "任务总览：等待运行",
+    script:
+      summary?.stage === "script"
+        ? `文案生成：${summary.message}`
+        : "文案生成：分析结构 → 改写 → 风险降级 → 保存结果",
+    storyboard: `分镜生成：已生成 ${storyboardCount} 条`,
+    assets:
+      stickmanProgress ||
+      `图片生成：成功 ${generatedStickmanShotCount} · 队列 ${Math.max(
+        0,
+        stickmanShotCount - generatedStickmanShotCount
+      )} · 并发 ${STICKMAN_IMAGE_CONCURRENCY}`,
+    voice: `配音字幕：${ttsStatus} · 时间线${hasTimeline ? "已生成" : "待生成"}`,
+    draft: draftPath
+      ? `剪辑：剪映草稿路径 ${draftPath}`
+      : "剪辑：AI 精剪决策生成 → 写入剪映草稿 → 验证轨道",
+    settings: "设置：API Profile、TTS 路径和授权功能",
+  }
+
+  return (
+    <section className="rounded-lg border bg-background px-4 py-3 text-sm text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-2">
+        <ListChecks className="size-4 shrink-0" />
+        <span className="min-w-0 break-words">{textByModule[moduleId]}</span>
+      </div>
+    </section>
+  )
+}
+
+function TaskRunConsole({
+  task,
+  summary,
+  events,
+}: {
+  task?: VideoTask
+  summary: VideoTaskRunSummary | null
+  events: VideoTaskRunEvent[]
+}) {
+  return (
+    <section className="grid max-h-[calc(100svh-8rem)] min-h-[520px] content-start rounded-lg border bg-background">
+      <div className="border-b p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">任务运行控制台</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              实时日志 · 最近 {events.length}/200 条
+            </p>
+          </div>
+          <span
+            className={`rounded-md border px-2 py-1 text-xs ${stateClassName(
+              summary?.state
+            )}`}
+          >
+            {stateLabel(summary?.state)}
+          </span>
+        </div>
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <div className="text-xs text-muted-foreground">当前动作</div>
+          <div className="mt-1 break-words text-sm">
+            {task ? summary?.message || "等待任务运行" : "暂无运行日志"}
+          </div>
+        </div>
+      </div>
+      <TaskRunFailurePanel summary={summary} events={events} />
+      <TaskRunEventList events={events} />
+    </section>
+  )
+}
+
+function TaskRunFailurePanel({
+  summary,
+  events,
+}: {
+  summary: VideoTaskRunSummary | null
+  events: VideoTaskRunEvent[]
+}) {
+  const blocker = [...events]
+    .reverse()
+    .find((event) => event.state === "failed" || event.state === "needs_manual")
+  if (!blocker && !summary?.failureCount && !summary?.needsManual) return null
+
+  return (
+    <div className="border-b p-4">
+      <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
+        <div className="mb-1 flex items-center gap-2 text-sm font-medium text-orange-600">
+          <AlertTriangle className="size-4" />
+          失败与待处理
+        </div>
+        <div className="break-words text-xs leading-5 text-muted-foreground">
+          {blocker?.error?.message || blocker?.message || "任务需要人工处理"}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TaskRunEventList({ events }: { events: VideoTaskRunEvent[] }) {
+  if (!events.length) {
+    return (
+      <div className="grid min-h-64 place-items-center p-5 text-center text-sm text-muted-foreground">
+        <div>
+          <div className="font-medium text-foreground">暂无运行日志</div>
+          <p className="mt-2 leading-6">
+            新建任务后，这里会显示文案、图片、配音和剪辑草稿的实时进度。
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-0 overflow-auto p-4">
+      <div className="grid gap-3">
+        {events.map((event) => (
+          <article key={event.id} className="rounded-lg border bg-muted/20 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-mono text-muted-foreground">
+                {formatEventTime(event.at)}
+              </span>
+              <span className="rounded-md border bg-background px-1.5 py-0.5 text-muted-foreground">
+                {stageLabel(event.stage)}
+              </span>
+              <span
+                className={`rounded-md border bg-background px-1.5 py-0.5 ${stateClassName(
+                  event.state
+                )}`}
+              >
+                {stateLabel(event.state)}
+              </span>
+            </div>
+            <div className="break-words text-sm leading-6">{event.message}</div>
+            {event.artifact ? (
+              <div className="mt-2 break-words rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">
+                {event.artifact.label}：{event.artifact.path}
+              </div>
+            ) : null}
+            {event.error ? (
+              <div className="mt-2 break-words text-xs text-red-600">
+                {event.error.message}
+              </div>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function TaskList({
   tasks,
   activeTaskId,
   onSelectTask,
   onCreateTask,
+  onDeleteTask,
 }: {
   tasks: VideoTask[]
   activeTaskId: string
   onSelectTask: (taskId: string) => void
   onCreateTask: () => void
+  onDeleteTask: (taskId: string) => void
 }) {
   if (!tasks.length) {
     return (
@@ -2537,28 +3452,43 @@ function TaskList({
         {tasks.map((task) => {
           const active = task.id === activeTaskId
           return (
-            <button
+            <div
               key={task.id}
-              type="button"
-              className={`rounded-lg border px-3 py-2 text-left transition ${
+              className={`flex items-stretch gap-2 rounded-lg border p-2 transition ${
                 active
                   ? "border-primary bg-background shadow-sm"
                   : "bg-background/60 hover:bg-background"
               }`}
-              onClick={() => onSelectTask(task.id)}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium">
-                  {task.title}
-                </span>
-                <span className="rounded-md border px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                  {task.status}
-                </span>
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {task.workflow.length} 步流程 · {task.createdAt.slice(0, 10)}
-              </div>
-            </button>
+              <button
+                type="button"
+                className="min-w-0 flex-1 text-left"
+                onClick={() => onSelectTask(task.id)}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-medium">
+                    {task.title}
+                  </span>
+                  <span className="rounded-md border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    {task.status}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {task.workflow.length} 步流程 · {task.createdAt.slice(0, 10)}
+                </div>
+              </button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-auto min-h-10 w-10 shrink-0 text-muted-foreground hover:text-destructive"
+                title="删除任务"
+                aria-label={`删除任务 ${task.title}`}
+                onClick={() => onDeleteTask(task.id)}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
           )
         })}
       </div>
@@ -2834,12 +3764,14 @@ function ScriptAnalysisPanel({
   fullAutoRewriteMode,
   copywritingBoard,
   conversionTheme,
+  selectedDuration,
   showAdvancedRewrite,
   onTopicChange,
   onWorkflowModeChange,
   onRewriteModeChange,
   onCopywritingBoardChange,
   onConversionThemeChange,
+  onDurationChange,
   onSaveWorkflowSettings,
   onShowAdvancedRewriteChange,
   onUsePastedScript,
@@ -2854,12 +3786,14 @@ function ScriptAnalysisPanel({
   fullAutoRewriteMode: ScriptRewriteMode
   copywritingBoard: CopywritingBoardId
   conversionTheme: string
+  selectedDuration: VideoDurationPreset
   showAdvancedRewrite: boolean
   onTopicChange: (value: string) => void
   onWorkflowModeChange: (value: ScriptWorkflowMode) => void
   onRewriteModeChange: (value: ScriptRewriteMode) => void
   onCopywritingBoardChange: (value: CopywritingBoardId) => void
   onConversionThemeChange: (value: string) => void
+  onDurationChange: (value: VideoDurationPreset) => void
   onSaveWorkflowSettings: (
     value: ScriptRewriteMode,
     board?: CopywritingBoardId,
@@ -3040,6 +3974,25 @@ function ScriptAnalysisPanel({
             onChange={(event) => onTopicChange(event.target.value)}
             className="min-h-24 rounded-lg border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
           />
+        </label>
+
+        <label className="grid max-w-xs gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            目标时长
+          </span>
+          <select
+            value={selectedDuration}
+            onChange={(event) =>
+              onDurationChange(event.target.value as VideoDurationPreset)
+            }
+            className="h-9 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+          >
+            {VIDEO_DURATION_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -3851,7 +4804,7 @@ function TimelineAssemblyPanel({
   ttsSettings: VideoTtsSettings
   taskVoicePresetId: VideoTtsVoicePresetId | ""
   ttsStatus: string
-  onAssembleTimeline: () => void
+  onAssembleTimeline: () => void | Promise<void>
   onSaveTtsSettings: (settings: VideoTtsSettings) => void
   onTaskVoicePresetChange: (value: VideoTtsVoicePresetId | "") => void
   onCheckTtsSettings: (settings?: VideoTtsSettings) => void
@@ -3907,7 +4860,7 @@ function TimelineAssemblyPanel({
             {voice?.audio ? (
               <div className="rounded-lg border bg-muted/30 p-3">
                 <div className="mb-2 text-xs font-medium text-muted-foreground">
-                  配音文件
+                  真实配音文件
                 </div>
                 <div className="truncate font-mono text-xs text-muted-foreground">
                   {voice.audio.path}
@@ -3917,7 +4870,16 @@ function TimelineAssemblyPanel({
                   timing；用户仍可手动改脚本后重新生成。
                 </div>
               </div>
-            ) : null}
+            ) : (
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
+                  配音文件
+                </div>
+                <div className="text-xs leading-5 text-muted-foreground">
+                  当前未生成真实音频文件；剪映草稿会包含图片和字幕，不会包含配音。请选择手动音频后重新生成时间线，或等待 TTS 合成接入。
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-[minmax(0,1fr)_260px] gap-4 max-lg:grid-cols-1">
               <div className="rounded-lg border bg-muted/30 p-3">
@@ -4245,9 +5207,11 @@ function RenderExportPanel({
       </div>
 
       <div className="grid gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <span>AI 剪辑决策</span>
-          <span className="min-w-0 truncate font-mono">{aiDirectorStatus}</span>
+        <div className="grid gap-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
+          <span className="font-medium">AI 剪辑决策</span>
+          <span className="min-w-0 break-words whitespace-normal font-mono leading-5 sm:text-right">
+            {aiDirectorStatus}
+          </span>
         </div>
 
         <div className="grid grid-cols-4 gap-2 max-xl:grid-cols-2 max-sm:grid-cols-1">

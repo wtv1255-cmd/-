@@ -44,6 +44,49 @@ test("video factory uses seven top modules instead of one long wall", async () =
   assert.match(source, /activeModule === "settings"/)
 })
 
+test("video factory shows persistent task progress header and run console across modules", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /TaskProgressHeader/)
+  assert.match(source, /TaskRunConsole/)
+  assert.match(source, /ModuleProgressStrip/)
+  assert.match(source, /TaskRunEventList/)
+  assert.match(source, /TaskRunFailurePanel/)
+  assert.match(source, /任务运行控制台/)
+  assert.match(source, /实时日志/)
+  assert.match(source, /总进度/)
+  assert.match(source, /暂无运行日志/)
+  assert.match(source, /grid-cols-\[minmax\(0,1fr\)_360px\]/)
+  assert.match(source, /max-xl:grid-cols-1/)
+})
+
+test("video factory restores task run logs through desktop progress ipc", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /readTaskRunEvents/)
+  assert.match(source, /readTaskRunSummary/)
+  assert.match(source, /appendTaskRunEvent/)
+  assert.match(source, /reportTaskProgress/)
+  assert.match(source, /setTaskRunEvents/)
+  assert.match(source, /setTaskRunSummary/)
+})
+
+test("video factory reports progress for script images tts and Jianying draft paths", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /stage: "script"[\s\S]*state: "running"/)
+  assert.match(source, /stage: "script"[\s\S]*state: "success"/)
+  assert.match(source, /stage: "script"[\s\S]*state: "failed"/)
+  assert.match(source, /stage: "images"[\s\S]*current:/)
+  assert.match(source, /stage: "images"[\s\S]*total:/)
+  assert.match(source, /state: "fallback"/)
+  assert.match(source, /stage: "voice"[\s\S]*IndexTTS2/)
+  assert.match(source, /stage: "voice"[\s\S]*state: "success"/)
+  assert.match(source, /stage: "voice"[\s\S]*state: "failed"/)
+  assert.match(source, /stage: "draft"[\s\S]*state: "artifact"/)
+  assert.match(source, /artifact: \{[\s\S]*kind: "jianying_draft"/)
+})
+
 test("script module exposes workflow modes passthrough and advanced rewrite channels", async () => {
   const source = await readVideoPage()
 
@@ -56,6 +99,9 @@ test("script module exposes workflow modes passthrough and advanced rewrite chan
   assert.match(source, /option\.description/)
   assert.match(source, /onUsePastedScript/)
   assert.match(source, /onSaveWorkflowSettings/)
+  assert.match(source, /selectedDuration/)
+  assert.match(source, /onDurationChange/)
+  assert.match(source, /durationPreset: selectedDuration/)
 })
 
 test("script module exposes copywriting boards and optional product theme controls", async () => {
@@ -217,6 +263,18 @@ test("video factory records recovery strategy for resumable task state", async (
   assert.match(source, /completedStepIds\.length/)
 })
 
+test("task list can delete a task and clear its local cache without deleting Jianying drafts", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /onDeleteTask/)
+  assert.match(source, /deleteVideoTask/)
+  assert.match(source, /deleteVideoTaskSnapshot/)
+  assert.match(source, /promptCenterDesktop\?\.deleteTaskCache/)
+  assert.match(source, /删除任务/)
+  assert.match(source, /仅删除她火本地缓存/)
+  assert.match(source, /剪映草稿不会删除/)
+})
+
 test("video factory wires api profile failover into live text and image calls", async () => {
   const source = await readVideoPage()
 
@@ -250,4 +308,15 @@ test("edit draft module exposes AI director controls and keeps editable draft as
   assert.match(source, /AI 剪辑决策/)
   assert.match(source, /createJianyingDraftPlan\({[\s\S]*aiDirectorPlan/)
   assert.match(source, /剪映可编辑草稿/)
+})
+
+test("edit draft module keeps long AI director errors from breaking layout", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /break-words/)
+  assert.match(source, /whitespace-normal/)
+  assert.doesNotMatch(
+    source,
+    /<span className="min-w-0 truncate font-mono">\{aiDirectorStatus\}<\/span>/
+  )
 })

@@ -12,10 +12,19 @@ import net from "node:net"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import {
+  createTaskAssetCopyIpcHandler,
   createTaskAssetFileIpcHandler,
   createTaskAssetPreviewIpcHandler,
+  createTaskCacheDeleteIpcHandler,
+  createTaskRunEventAppendIpcHandler,
+  createTaskRunEventsReadIpcHandler,
+  createTaskRunLogClearIpcHandler,
+  createTaskRunSummaryReadIpcHandler,
 } from "./task-file-store.mjs"
-import { createLocalTtsProjectIpcHandler } from "./local-tts-project.mjs"
+import {
+  createLocalTtsProjectIpcHandler,
+  createLocalTtsSynthesisIpcHandler,
+} from "./local-tts-project.mjs"
 import { createJianyingDraftIpcHandler } from "./jianying-draft.mjs"
 import { createVideoRendererIpcHandler } from "./video-renderer.mjs"
 
@@ -77,6 +86,10 @@ ipcMain.handle("ta-huo:read-default-api-settings", () => {
 ipcMain.handle(
   "ta-huo:check-local-tts-project",
   createLocalTtsProjectIpcHandler()
+)
+ipcMain.handle(
+  "ta-huo:synthesize-local-tts",
+  createLocalTtsSynthesisIpcHandler(app.getPath("userData"))
 )
 
 ipcMain.handle("ta-huo:select-audio-file", async () => {
@@ -230,8 +243,32 @@ ipcMain.handle(
   createTaskAssetFileIpcHandler(app.getPath("userData"))
 )
 ipcMain.handle(
+  "ta-huo:copy-task-asset-file",
+  createTaskAssetCopyIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
   "ta-huo:read-task-asset-preview",
   createTaskAssetPreviewIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:delete-task-cache",
+  createTaskCacheDeleteIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:append-task-run-event",
+  createTaskRunEventAppendIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:read-task-run-events",
+  createTaskRunEventsReadIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:read-task-run-summary",
+  createTaskRunSummaryReadIpcHandler(app.getPath("userData"))
+)
+ipcMain.handle(
+  "ta-huo:clear-task-run-log",
+  createTaskRunLogClearIpcHandler(app.getPath("userData"))
 )
 
 function logStartup(message) {

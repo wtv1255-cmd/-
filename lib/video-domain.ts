@@ -369,3 +369,10 @@ export function readVideoTaskSnapshot(
   if (!raw) return null
   return createVideoTaskSnapshot(JSON.parse(raw) as VideoTaskSnapshot)
 }
+
+export function deleteVideoTaskSnapshot(
+  taskId: string,
+  storage: Storage = window.localStorage
+) {
+  storage.removeItem(`${VIDEO_TASK_SNAPSHOT_STORAGE_PREFIX}${taskId}`)
+}

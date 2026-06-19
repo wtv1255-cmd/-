@@ -96,6 +96,73 @@ function parseNativeDraftOutput(stdout) {
   return null
 }
 
+async function readJsonFile(filePath) {
+  return JSON.parse(await fs.readFile(filePath, "utf8"))
+}
+
+function isVisualDirectionText(value) {
+  return /^[【\[]\s*(画面|镜头|场景|视觉|分镜)\s*[:：]/u.test(
+    String(value || "").trim()
+  )
+}
+
+function readTextMaterialText(material) {
+  const content = material?.content
+  if (typeof content !== "string") return ""
+
+  try {
+    const parsed = JSON.parse(content)
+    if (typeof parsed?.text === "string") return parsed.text
+  } catch {}
+
+  return content
+}
+
+function inspectNativeDraftContent(content) {
+  const tracks = Array.isArray(content?.tracks) ? content.tracks : []
+  const videoTrackCount = tracks.filter((track) => track?.type === "video").length
+  const videoSegmentCount = tracks
+    .filter((track) => track?.type === "video")
+    .reduce(
+      (sum, track) => sum + (Array.isArray(track?.segments) ? track.segments.length : 0),
+      0
+    )
+  const textSegments = tracks
+    .filter((track) => track?.type === "text")
+    .flatMap((track) => (Array.isArray(track?.segments) ? track.segments : []))
+  const textMaterialById = new Map(
+    (Array.isArray(content?.materials?.texts) ? content.materials.texts : [])
+      .filter((item) => item?.id)
+      .map((item) => [item.id, item])
+  )
+  const hasVisualDirectionSubtitle = textSegments.some((segment) => {
+    const material = textMaterialById.get(segment?.material_id)
+    return isVisualDirectionText(readTextMaterialText(material) || segment?.text)
+  })
+
+  return {
+    videoTrackCount,
+    videoSegmentCount,
+    textSegmentCount: textSegments.length,
+    hasVisualDirectionSubtitle,
+  }
+}
+
+async function validateNativeDraft({ nativeDraftPath }) {
+  const contentPath = path.join(nativeDraftPath, "draft_content.json")
+  const content = await readJsonFile(contentPath)
+  const summary = inspectNativeDraftContent(content)
+
+  if (!summary.videoSegmentCount) {
+    throw new Error("剪映原生草稿缺少视频/图片轨，请重新生成草稿。")
+  }
+  if (summary.hasVisualDirectionSubtitle) {
+    throw new Error("剪映原生草稿字幕包含【画面】提示，请重新生成草稿。")
+  }
+
+  return summary
+}
+
 async function createNativeJianyingDraft({
   userDataDir,
   plan,
@@ -162,12 +229,28 @@ async function createNativeJianyingDraft({
       nativeMaterialsPath: materialsRoot,
     }
   }
+  let nativeDraftSummary
+  try {
+    nativeDraftSummary = await validateNativeDraft({
+      nativeDraftPath: output.nativeDraftPath,
+    })
+  } catch (error) {
+    return {
+      nativeDraftCreated: false,
+      nativeDraftError:
+        error instanceof Error ? error.message : "剪映原生草稿验收失败",
+      nativeDraftPath: output.nativeDraftPath,
+      nativeDraftsRoot: draftsRoot,
+      nativeMaterialsPath: output.nativeMaterialsPath || materialsRoot,
+    }
+  }
 
   return {
     nativeDraftCreated: true,
     nativeDraftPath: output.nativeDraftPath,
     nativeDraftsRoot: draftsRoot,
     nativeMaterialsPath: output.nativeMaterialsPath || materialsRoot,
+    nativeDraftSummary,
   }
 }
 

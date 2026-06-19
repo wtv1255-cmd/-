@@ -103,6 +103,21 @@ test("Jianying draft plan is the primary editable output instead of MP4 export",
   assert.match(plan.command, /ta-huo-create-jianying-draft/)
 })
 
+test("Jianying draft plan carries the selected 16:9 canvas to native creation", async () => {
+  const { createJianyingDraftPlan } = await importRenderingModule()
+  const plan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    canvasAspectRatio: "16:9",
+  })
+
+  assert.deepEqual(plan.canvas, {
+    aspectRatio: "16:9",
+    width: 1920,
+    height: 1080,
+  })
+})
+
 test("AI director plan preserves locks and creates editable placeholders", async () => {
   const { createJianyingDraftPlan } = await importRenderingModule()
   const plan = createJianyingDraftPlan({
@@ -414,6 +429,56 @@ test("image asset draft timeline exports generated shot images as a visual track
       ["shot_01_visual", "generated_image_01", 0, 2000],
       ["shot_02_visual", "manual_image_02", 2000, 2500],
     ]
+  )
+})
+
+test("Jianying draft plan repairs stale visual asset ids by shot tag", async () => {
+  const { createJianyingDraftPlan } = await importRenderingModule()
+  const plan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+    aiDirectorPlan: {
+      trackOrder: ["visual"],
+      clips: [
+        {
+          id: "shot_01_visual",
+          trackId: "visual",
+          type: "visual",
+          assetId: "stickman_image_01_shot_01_0-3s_stickman.png_1781836337937",
+          startMs: 0,
+          durationMs: 3000,
+          locked: false,
+          aiEditable: true,
+          placeholder: false,
+          transition: "soft_cut",
+          zoom: "slow_in",
+        },
+      ],
+    },
+    materialAssets: [
+      {
+        id: "stickman_image_01_shot_01_0-3s_stickman.png_1781839938812",
+        kind: "stickman_image",
+        displayName: "01_shot_01_0-3s_stickman.png",
+        file: {
+          id: "file_01",
+          taskId: "task_01",
+          kind: "stickman_image",
+          filename: "01_shot_01_0-3s_stickman.png",
+          path: "%APPDATA%/她火/tasks/task_01/stickman_image/01_shot_01_0-3s_stickman.png",
+          bytes: 2048,
+          mimeType: "image/png",
+          storage: "app_user_data_task_dir",
+        },
+        tags: ["shot_01", "generated_image"],
+      },
+    ],
+  })
+
+  assert.equal(
+    plan.aiDirector.clips[0].assetId,
+    "stickman_image_01_shot_01_0-3s_stickman.png_1781839938812"
   )
 })
 

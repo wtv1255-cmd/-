@@ -124,6 +124,24 @@ export type GeneratedStickmanStoryboardAsset = {
   attempts: number
 }
 
+export type ValidateGeneratedImageAspectRatioInput = {
+  width: number
+  height: number
+  settings?: VideoImageGenerationSettings
+}
+
+export type GeneratedImageAspectRatioValidation =
+  | {
+      ok: true
+      expectedAspectRatio: VideoImageGenerationSettings["aspectRatio"]
+      actualAspectRatio: VideoImageGenerationSettings["aspectRatio"]
+    }
+  | {
+      ok: false
+      expectedAspectRatio: VideoImageGenerationSettings["aspectRatio"]
+      actualAspectRatio: VideoImageGenerationSettings["aspectRatio"] | "unknown"
+    }
+
 export type RunStickmanImageGenerationQueueInput<T> = {
   items: T[]
   concurrency: number
@@ -303,6 +321,28 @@ function clampStyleStrength(value: unknown) {
   return Math.max(0, Math.min(100, Math.floor(number)))
 }
 
+function aspectRatioToNumber(
+  value: VideoImageGenerationSettings["aspectRatio"]
+) {
+  if (value === "1:1") return 1
+  if (value === "16:9") return 16 / 9
+  return 9 / 16
+}
+
+function nearestImageAspectRatio(width: number, height: number) {
+  if (!width || !height) return "unknown" as const
+
+  const actual = width / height
+  const ratios: Array<[VideoImageGenerationSettings["aspectRatio"], number]> = [
+    ["9:16", 9 / 16],
+    ["1:1", 1],
+    ["16:9", 16 / 9],
+  ]
+  return ratios.reduce((best, item) =>
+    Math.abs(item[1] - actual) < Math.abs(best[1] - actual) ? item : best
+  )[0]
+}
+
 export function normalizeVideoImageGenerationSettings(
   input: NormalizeVideoImageGenerationSettingsInput = {}
 ): VideoImageGenerationSettings {
@@ -315,6 +355,47 @@ export function normalizeVideoImageGenerationSettings(
     styleStrength: clampStyleStrength(
       input.advanced?.styleStrength ?? input.styleStrength
     ),
+  }
+}
+
+export function validateGeneratedImageAspectRatio({
+  width,
+  height,
+  settings = normalizeVideoImageGenerationSettings(),
+}: ValidateGeneratedImageAspectRatioInput): GeneratedImageAspectRatioValidation {
+  const normalizedSettings = normalizeVideoImageGenerationSettings(settings)
+  const imageWidth = Number(width)
+  const imageHeight = Number(height)
+  const actualAspectRatio =
+    Number.isFinite(imageWidth) && Number.isFinite(imageHeight)
+      ? nearestImageAspectRatio(imageWidth, imageHeight)
+      : "unknown"
+  const expectedAspectRatio = normalizedSettings.aspectRatio
+
+  if (actualAspectRatio === "unknown") {
+    return {
+      ok: false,
+      expectedAspectRatio,
+      actualAspectRatio,
+    }
+  }
+
+  const expected = aspectRatioToNumber(expectedAspectRatio)
+  const actual = imageWidth / imageHeight
+  const tolerance = 0.08
+
+  if (Math.abs(actual - expected) <= tolerance) {
+    return {
+      ok: true,
+      expectedAspectRatio,
+      actualAspectRatio,
+    }
+  }
+
+  return {
+    ok: false,
+    expectedAspectRatio,
+    actualAspectRatio,
   }
 }
 
