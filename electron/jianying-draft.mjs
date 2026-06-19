@@ -421,11 +421,19 @@ export async function createJianyingDraftPackage({
     const manifestPath = path.join(draftPath, "ta-huo-director-plan.json")
     const contentPath = path.join(draftPath, "draft_content.json")
     const materialsPath = path.join(draftPath, "task-materials.json")
+    const editDecisionPlanPath = path.join(draftPath, "edit-decision-plan.json")
     const taskMaterials = createTaskMaterials(directorPlan)
 
     await fs.writeFile(manifestPath, JSON.stringify(directorPlan, null, 2), "utf8")
     await fs.writeFile(contentPath, JSON.stringify(draftContent, null, 2), "utf8")
     await fs.writeFile(materialsPath, JSON.stringify(taskMaterials, null, 2), "utf8")
+    if (directorPlan?.editDecisionPlan) {
+      await fs.writeFile(
+        editDecisionPlanPath,
+        JSON.stringify(directorPlan.editDecisionPlan, null, 2),
+        "utf8"
+      )
+    }
     const nativeDraft = await createNativeJianyingDraft({
       userDataDir,
       plan: directorPlan,
@@ -442,6 +450,9 @@ export async function createJianyingDraftPackage({
       manifestPath,
       contentPath,
       materialsPath,
+      editDecisionPlanPath: directorPlan?.editDecisionPlan
+        ? editDecisionPlanPath
+        : undefined,
       ...nativeDraft,
       bytes: Buffer.byteLength(JSON.stringify(directorPlan)),
     }

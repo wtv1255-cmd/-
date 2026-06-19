@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("promptCenterDesktop", {
   selectAudioFile() {
     return ipcRenderer.invoke("ta-huo:select-audio-file")
   },
+  selectJianyingDraftsRoot() {
+    return ipcRenderer.invoke("ta-huo:select-jianying-drafts-root")
+  },
   saveFileToDownloads(input) {
     return ipcRenderer.invoke("ta-huo:save-file-to-downloads", input)
   },

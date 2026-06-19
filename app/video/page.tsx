@@ -142,11 +142,14 @@ import {
   type VideoTtsSettings,
 } from "@/lib/video-tts"
 import {
-  buildAiDirectorGenerationRequest,
+  buildEditDecisionGenerationRequest,
+  createBasicEditDecisionPlan,
   createImageAssetsDraftTimeline,
+  createJianyingAiDirectorFromEditDecisionPlan,
   createJianyingDraftPlan,
-  createModelAiDirectorPlan,
+  createModelEditDecisionPlan,
   createRenderEngineOptions,
+  type EditDecisionPlan,
   type JianyingDraftPlan,
   type RenderEngineId,
   type RenderEngineOption,
@@ -170,6 +173,8 @@ import {
 } from "@/lib/video-task-progress"
 
 const STICKMAN_IMAGE_CONCURRENCY = 8
+const DEFAULT_JIANYING_DRAFTS_ROOT = "D:\\剪映草稿\\JianyingPro Drafts"
+const JIANYING_DRAFTS_ROOT_STORAGE_KEY = "ta-huo:video-factory:jianying-drafts-root"
 
 function mimeTypeForAudioFilename(filename: string) {
   const lower = filename.toLowerCase()
@@ -186,6 +191,31 @@ function durationMsFromPreset(preset: VideoDurationPreset) {
   if (preset === "45-60s") return 60000
   if (preset === "60-90s") return 90000
   return 120000
+}
+
+function readJianyingDraftsRoot() {
+  if (typeof window === "undefined") return DEFAULT_JIANYING_DRAFTS_ROOT
+
+  try {
+    const saved = window.localStorage
+      .getItem(JIANYING_DRAFTS_ROOT_STORAGE_KEY)
+      ?.trim()
+    return saved || DEFAULT_JIANYING_DRAFTS_ROOT
+  } catch {
+    return DEFAULT_JIANYING_DRAFTS_ROOT
+  }
+}
+
+function saveJianyingDraftsRoot(directory: string) {
+  const cleanDirectory = directory.trim()
+  if (!cleanDirectory || typeof window === "undefined") return
+
+  try {
+    window.localStorage.setItem(
+      JIANYING_DRAFTS_ROOT_STORAGE_KEY,
+      cleanDirectory
+    )
+  } catch {}
 }
 
 async function readImageBlobDimensions(blob: Blob) {
@@ -461,7 +491,7 @@ async function requestScriptGenerationText(
 }
 
 async function requestAiDirectorGeneration(
-  request: ReturnType<typeof buildAiDirectorGenerationRequest>
+  request: ReturnType<typeof buildEditDecisionGenerationRequest>
 ) {
   if (!request.body.apiKey) {
     throw {
@@ -670,6 +700,9 @@ function VideoFactoryShell() {
   const [videoTimeline, setVideoTimeline] = useState<VideoTimeline | null>(null)
   const [requestedRenderEngine, setRequestedRenderEngine] =
     useState<RenderEngineId>("jianying")
+  const [jianyingDraftsRoot, setJianyingDraftsRoot] = useState(
+    readJianyingDraftsRoot
+  )
   const [renderEngines] = useState<RenderEngineOption[]>(() =>
     createRenderEngineOptions({
       jianyingAvailable: false,
@@ -682,6 +715,8 @@ function VideoFactoryShell() {
   const [aiDirectorPlan, setAiDirectorPlan] = useState<
     JianyingDraftPlan["aiDirector"] | null
   >(null)
+  const [editDecisionPlan, setEditDecisionPlan] =
+    useState<EditDecisionPlan | null>(null)
   const [aiDirectorStatus, setAiDirectorStatus] =
     useState("AI 剪辑决策未生成")
   const [isGeneratingAiDirector, setIsGeneratingAiDirector] = useState(false)
@@ -746,6 +781,8 @@ function VideoFactoryShell() {
         setVoicePlan(null)
         setVideoTimeline(null)
         setDraftPlan(null)
+        setAiDirectorPlan(null)
+        setEditDecisionPlan(null)
         setTaskRunEvents([])
         setTaskRunSummary(null)
         return
@@ -1097,6 +1134,8 @@ function VideoFactoryShell() {
       setVoicePlan(null)
       setVideoTimeline(null)
       setDraftPlan(null)
+      setAiDirectorPlan(null)
+      setEditDecisionPlan(null)
     }
     setToast("任务已删除，剪映草稿未删除")
   }
@@ -1463,6 +1502,7 @@ function VideoFactoryShell() {
     setVideoTimeline(null)
     setDraftPlan(null)
     setAiDirectorPlan(null)
+    setEditDecisionPlan(null)
     setAiDirectorStatus("分镜已调整，请重新生成 AI 剪辑决策")
     updateActiveTaskSnapshot((snapshot) => {
       const snapshotResult = deleteStoryboardShotAndReindex({
@@ -2069,7 +2109,7 @@ function VideoFactoryShell() {
     })
     const draftResult =
       plan.status === "ready" && desktopDraft
-        ? await desktopDraft({ plan })
+        ? await desktopDraft({ plan, jianyingDraftsRoot })
         : null
     const draftOutput =
       draftResult?.ok && draftResult.draftPath
@@ -2141,6 +2181,25 @@ function VideoFactoryShell() {
               : `${plan.message} 当前浏览器环境仅生成草稿计划，桌面端会创建草稿包。`,
       } satisfies JianyingDraftPlan,
     }
+  }
+
+  const selectJianyingDraftsRoot = async () => {
+    const picker = window.promptCenterDesktop?.selectJianyingDraftsRoot
+    if (!picker) {
+      setToast("当前环境不支持选择剪映草稿目录，请在桌面端使用。")
+      return
+    }
+
+    const result = await picker()
+    if (result?.error) {
+      setToast(`选择剪映草稿目录失败：${result.error}`)
+      return
+    }
+    if (result?.canceled || !result?.directory) return
+
+    setJianyingDraftsRoot(result.directory)
+    saveJianyingDraftsRoot(result.directory)
+    setToast("已更新剪映草稿目录")
   }
 
   const exportImageAssetsToJianyingDraft = async () => {
@@ -2608,6 +2667,7 @@ function VideoFactoryShell() {
       taskId: activeTask.id,
       timeline: videoTimeline,
       aiDirectorPlan: aiDirectorPlan || undefined,
+      editDecisionPlan: editDecisionPlan || undefined,
       materialAssets: videoAssets,
       copywritingBoard: scriptCopywritingBoard,
       canvasAspectRatio: imageGenerationSettings.aspectRatio,
@@ -2664,6 +2724,12 @@ function VideoFactoryShell() {
       copywritingBoard: scriptCopywritingBoard,
       canvasAspectRatio: imageGenerationSettings.aspectRatio,
     })
+    const fallbackEditDecisionPlan = createBasicEditDecisionPlan({
+      taskId: activeTask.id,
+      timeline: videoTimeline,
+      style: "stickman_fast_cut",
+      targetEngine: "jianying",
+    })
     const failoverPlan = createModuleFailoverPlan(apiProfiles, "edit_director")
     const failoverLogEntry = createApiFailoverLogEntry(failoverPlan)
     const script =
@@ -2675,18 +2741,26 @@ function VideoFactoryShell() {
       const failoverResult = await runApiProfileFailover(
         failoverPlan,
         async (attempt) => {
-          const request = buildAiDirectorGenerationRequest({
+          const request = buildEditDecisionGenerationRequest({
             profile: requestContextFromAttempt(attempt),
             script,
             timeline: videoTimeline,
-            fallbackPlan: fallbackDraftPlan.aiDirector,
-            brandOverlays: fallbackDraftPlan.brandOverlays,
+            fallbackPlan: fallbackEditDecisionPlan,
+            style: fallbackEditDecisionPlan.style,
+            targetEngine: "jianying",
           })
           const modelText = await requestAiDirectorGeneration(request)
+          const editDecisionResult = createModelEditDecisionPlan({
+            fallbackPlan: fallbackEditDecisionPlan,
+            modelText,
+          })
           return {
-            aiDirector: createModelAiDirectorPlan({
+            editDecisionPlan: editDecisionResult.plan,
+            editDecisionResult,
+            aiDirector: createJianyingAiDirectorFromEditDecisionPlan({
+              timeline: videoTimeline,
               fallbackPlan: fallbackDraftPlan.aiDirector,
-              modelText,
+              editDecisionPlan: editDecisionResult.plan,
             }),
             logEntry: request.logEntry,
           }
@@ -2716,13 +2790,15 @@ function VideoFactoryShell() {
       }
 
       setAiDirectorPlan(failoverResult.value.aiDirector)
+      setEditDecisionPlan(failoverResult.value.editDecisionPlan)
       setAiDirectorStatus(failoverSummary)
       setDraftPlan((current) =>
         current
           ? {
               ...current,
               aiDirector: failoverResult.value.aiDirector,
-              message: "AI 精剪方案已写入剪映草稿计划。",
+              editDecisionPlan: failoverResult.value.editDecisionPlan,
+              message: "AI 精剪决策已写入统一 EDP，并已适配剪映草稿计划。",
             }
           : current
       )
@@ -2734,11 +2810,15 @@ function VideoFactoryShell() {
             id: `ai_director_${Date.now()}`,
             at: new Date().toISOString(),
             kind: "ai_director_plan",
-            message: `${failoverSummary} · clips ${failoverResult.value.aiDirector.clips.length} · ${JSON.stringify(failoverLogEntry)}`,
+            message: `${failoverSummary} · EDP decisions ${failoverResult.value.editDecisionPlan.decisions.length} · clips ${failoverResult.value.aiDirector.clips.length} · ${JSON.stringify(failoverLogEntry)}`,
           },
         ],
       }))
-      setToast("AI 精剪方案已生成")
+      setToast(
+        failoverResult.value.editDecisionResult.fallbackUsed
+          ? "AI 输出非法，已回退基础剪辑"
+          : "AI 精剪决策已生成"
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 精剪生成失败"
       setAiDirectorStatus(message)
@@ -3040,8 +3120,10 @@ function VideoFactoryShell() {
                   hasTimeline={Boolean(videoTimeline?.tracks.length)}
                   aiDirectorStatus={aiDirectorStatus}
                   generatingAiDirector={isGeneratingAiDirector}
+                  jianyingDraftsRoot={jianyingDraftsRoot}
                   onEngineChange={setRequestedRenderEngine}
                   onGenerateAiDirectorPlan={generateAiDirectorPlan}
+                  onSelectJianyingDraftsRoot={selectJianyingDraftsRoot}
                   onPrepareExport={prepareRenderExport}
                 />
 
@@ -5167,8 +5249,10 @@ function RenderExportPanel({
   hasTimeline,
   aiDirectorStatus,
   generatingAiDirector,
+  jianyingDraftsRoot,
   onEngineChange,
   onGenerateAiDirectorPlan,
+  onSelectJianyingDraftsRoot,
   onPrepareExport,
 }: {
   engines: RenderEngineOption[]
@@ -5177,8 +5261,10 @@ function RenderExportPanel({
   hasTimeline: boolean
   aiDirectorStatus: string
   generatingAiDirector: boolean
+  jianyingDraftsRoot: string
   onEngineChange: (engine: RenderEngineId) => void
   onGenerateAiDirectorPlan: () => void
+  onSelectJianyingDraftsRoot: () => void
   onPrepareExport: () => void
 }) {
   return (
@@ -5207,6 +5293,22 @@ function RenderExportPanel({
       </div>
 
       <div className="grid gap-4">
+        <div className="grid gap-2 rounded-lg border bg-muted/30 px-3 py-3 text-xs text-muted-foreground sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+          <span className="font-medium text-foreground">剪映草稿目录</span>
+          <span className="min-w-0 truncate font-mono leading-5">
+            {jianyingDraftsRoot || DEFAULT_JIANYING_DRAFTS_ROOT}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onSelectJianyingDraftsRoot}
+          >
+            <FolderOpen className="size-4" />
+            选择剪映草稿目录
+          </Button>
+        </div>
+
         <div className="grid gap-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
           <span className="font-medium">AI 剪辑决策</span>
           <span className="min-w-0 break-words whitespace-normal font-mono leading-5 sm:text-right">

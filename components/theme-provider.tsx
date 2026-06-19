@@ -39,6 +39,11 @@ declare global {
         filename?: string
         error?: string
       }>
+      selectJianyingDraftsRoot?: () => Promise<{
+        canceled?: boolean
+        directory?: string
+        error?: string
+      }>
       saveFileToDownloads?: (input: {
         filename: string
         mimeType?: string
@@ -139,7 +144,10 @@ declare global {
         taskId?: string
         error?: string
       }>
-      createJianyingDraft?: (input: { plan: unknown }) => Promise<{
+      createJianyingDraft?: (input: {
+        plan: unknown
+        jianyingDraftsRoot?: string
+      }) => Promise<{
         ok: boolean
         taskId?: string
         draftPath?: string

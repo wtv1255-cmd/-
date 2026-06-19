@@ -118,6 +118,25 @@ ipcMain.handle("ta-huo:select-audio-file", async () => {
   }
 })
 
+ipcMain.handle("ta-huo:select-jianying-drafts-root", async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "选择剪映草稿目录",
+      properties: ["openDirectory", "createDirectory"],
+    })
+    const directory = result.filePaths[0] || ""
+    return {
+      canceled: result.canceled || !directory,
+      directory,
+    }
+  } catch (error) {
+    return {
+      canceled: false,
+      error: error instanceof Error ? error.message : "选择剪映草稿目录失败",
+    }
+  }
+})
+
 function readDownloadDirectory() {
   try {
     const downloadSettingsPath = getDownloadSettingsPath()

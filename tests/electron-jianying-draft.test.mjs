@@ -159,6 +159,66 @@ test("Jianying draft writer creates a task-scoped editable draft package", async
   }
 })
 
+test("Jianying draft writer preserves EditDecisionPlan as the engine-independent source", async () => {
+  const { createJianyingDraftPackage } = await importJianyingDraftModule()
+  const userDataDir = await mkdtemp(path.join(tmpdir(), "ta-huo-jy-edp-"))
+  const edpPlan = {
+    ...draftPlan,
+    editDecisionPlan: {
+      version: 1,
+      taskId: "task_01",
+      style: "stickman_fast_cut",
+      targetEngine: "jianying",
+      timelineDurationMs: 30000,
+      decisions: [
+        {
+          id: "decision_001",
+          shotId: "shot_01",
+          timeRange: { startMs: 0, endMs: 15000 },
+          pace: "fast",
+          visualMotion: [
+            { type: "zoom_in", from: 1, to: 1.08, easing: "easeOut" },
+          ],
+          transitionOut: { type: "flash_cut", durationMs: 120 },
+          subtitleEmphasis: [
+            { text: "小白", style: "pop", color: "accent", scale: 1.18 },
+          ],
+          audioCues: [
+            { type: "hit", atMs: 600, label: "impact_light" },
+            { type: "bgm_duck", atMs: 0, durationMs: 1800, volume: 0.45 },
+          ],
+          bRoll: { strategy: "reuse_existing", assetId: "stickman_01" },
+        },
+      ],
+      qualityChecks: [
+        { type: "pace", state: "pass" },
+        { type: "blank_visual", state: "pass" },
+        { type: "black_frame", state: "pass" },
+        { type: "subtitle_sync", state: "pass" },
+      ],
+    },
+  }
+
+  try {
+    const result = await createJianyingDraftPackage({
+      userDataDir,
+      plan: edpPlan,
+    })
+    const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"))
+    const edpPath = path.join(result.draftPath, "edit-decision-plan.json")
+    const edp = JSON.parse(await readFile(edpPath, "utf8"))
+
+    assert.equal(result.ok, true)
+    assert.equal(manifest.editDecisionPlan.decisions[0].transitionOut.type, "flash_cut")
+    assert.equal(edp.targetEngine, "jianying")
+    assert.equal(edp.decisions[0].pace, "fast")
+    assert.equal(edp.decisions[0].audioCues[1].type, "bgm_duck")
+    assert.equal(edp.qualityChecks.some((check) => check.type === "blank_visual"), true)
+  } finally {
+    await rm(userDataDir, { force: true, recursive: true })
+  }
+})
+
 test("native Jianying draft helper is bundled with Electron sources", async () => {
   await access(
     path.join(projectRoot, "electron", "create-native-jianying-draft.py")

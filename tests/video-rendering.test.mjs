@@ -241,6 +241,201 @@ test("AI director request is sanitized and model parse falls back on invalid out
   assert.deepEqual(fallback, basePlan.aiDirector)
 })
 
+test("edit decision plan is the required AI intermediate and covers advanced editing decisions", async () => {
+  const {
+    buildEditDecisionGenerationRequest,
+    createBasicEditDecisionPlan,
+    createJianyingAiDirectorFromEditDecisionPlan,
+    createJianyingDraftPlan,
+    createModelEditDecisionPlan,
+  } = await importRenderingModule()
+  const baseDraftPlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+  })
+  const fallbackEdp = createBasicEditDecisionPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    style: "stickman_fast_cut",
+    targetEngine: "jianying",
+  })
+  const request = buildEditDecisionGenerationRequest({
+    profile: {
+      service: "edit_director",
+      profileId: "director-main",
+      model: "director-model",
+      apiBaseUrl: "https://director.example.com/v1",
+      apiKey: "secret-director",
+    },
+    script: "前三秒抓住注意力。后面慢慢讲清楚。",
+    timeline: readyTimeline,
+    fallbackPlan: fallbackEdp,
+  })
+  const modelResult = createModelEditDecisionPlan({
+    fallbackPlan: fallbackEdp,
+    modelText: JSON.stringify({
+      version: 1,
+      taskId: "task_01",
+      style: "stickman_fast_cut",
+      targetEngine: "jianying",
+      timelineDurationMs: 45000,
+      decisions: [
+        {
+          id: "decision_001",
+          shotId: "shot_01",
+          timeRange: { startMs: 0, endMs: 15000 },
+          pace: "fast",
+          visualMotion: [
+            { type: "zoom_in", from: 1, to: 1.08, easing: "easeOut" },
+          ],
+          transitionOut: { type: "flash_cut", durationMs: 120 },
+          subtitleEmphasis: [
+            { text: "前三秒", style: "pop", color: "accent", scale: 1.22 },
+          ],
+          audioCues: [
+            { type: "hit", atMs: 600, label: "impact_light" },
+            { type: "bgm_duck", atMs: 0, durationMs: 1800, volume: 0.42 },
+          ],
+          bRoll: { strategy: "reuse_existing", assetId: "stickman_01" },
+        },
+        {
+          id: "decision_002",
+          shotId: "shot_02",
+          timeRange: { startMs: 15000, endMs: 30000 },
+          pace: "slow",
+          visualMotion: [
+            { type: "pan_right", from: 0, to: 18, easing: "linear" },
+          ],
+          transitionOut: { type: "hard_cut", durationMs: 0 },
+          subtitleEmphasis: [
+            { text: "慢慢讲清楚", style: "color", color: "warning" },
+          ],
+          audioCues: [{ type: "sfx", atMs: 15400, label: "whoosh_soft" }],
+          bRoll: { strategy: "needs_new_broll", reason: "需要补产品界面细节" },
+        },
+      ],
+      qualityChecks: [
+        { type: "pace", state: "pass" },
+        { type: "blank_visual", state: "pass" },
+        { type: "black_frame", state: "pass" },
+        { type: "subtitle_sync", state: "pass" },
+      ],
+    }),
+  })
+  const jianyingDirector = createJianyingAiDirectorFromEditDecisionPlan({
+    timeline: readyTimeline,
+    fallbackPlan: baseDraftPlan.aiDirector,
+    editDecisionPlan: modelResult.plan,
+  })
+  const firstVisual = jianyingDirector.clips.find(
+    (clip) => clip.id === "shot_01_visual"
+  )
+  const secondVisual = jianyingDirector.clips.find(
+    (clip) => clip.id === "shot_02_visual"
+  )
+  const subtitle = jianyingDirector.clips.find((clip) => clip.id === "subtitle_01")
+
+  assert.equal(request.body.model, "director-model")
+  assert.match(request.body.messages[0].content, /EditDecisionPlan/)
+  assert.match(request.body.messages[0].content, /不能直接写剪映|不得直接写剪映/)
+  assert.equal(JSON.stringify(request.logEntry).includes("secret-director"), false)
+  assert.equal(modelResult.ok, true)
+  assert.equal(modelResult.fallbackUsed, false)
+  assert.equal(modelResult.plan.decisions.length, 2)
+  assert.deepEqual(
+    modelResult.plan.decisions.map((decision) => decision.pace),
+    ["fast", "slow"]
+  )
+  assert.deepEqual(
+    modelResult.plan.qualityChecks.map((check) => check.type),
+    ["pace", "blank_visual", "black_frame", "subtitle_sync"]
+  )
+  assert.equal(firstVisual.pace, "fast")
+  assert.equal(firstVisual.transition, "flash_cut")
+  assert.equal(firstVisual.zoom, "fast_in")
+  assert.equal(firstVisual.motion, "zoom_in")
+  assert.equal(firstVisual.audioCue, "impact_light")
+  assert.equal(firstVisual.bgmDucking, true)
+  assert.equal(firstVisual.bRollStrategy, "reuse_existing")
+  assert.equal(secondVisual.pace, "slow")
+  assert.equal(secondVisual.motion, "pan_right")
+  assert.match(secondVisual.replacementHint, /产品界面细节/)
+  assert.equal(subtitle.emphasisSubtitle, true)
+  assert.equal(subtitle.subtitleStyle, "pop")
+})
+
+test("invalid edit decision model output falls back to the basic plan without mutating the draft", async () => {
+  const {
+    createBasicEditDecisionPlan,
+    createJianyingAiDirectorFromEditDecisionPlan,
+    createJianyingDraftPlan,
+    createModelEditDecisionPlan,
+  } = await importRenderingModule()
+  const baseDraftPlan = createJianyingDraftPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    createdAt: "2026-06-18T09:00:00.000Z",
+  })
+  const fallbackEdp = createBasicEditDecisionPlan({
+    taskId: "task_01",
+    timeline: readyTimeline,
+    style: "stickman_fast_cut",
+    targetEngine: "jianying",
+  })
+  const result = createModelEditDecisionPlan({
+    fallbackPlan: fallbackEdp,
+    modelText: JSON.stringify({
+      version: 1,
+      taskId: "task_01",
+      targetEngine: "jianying",
+      decisions: [
+        {
+          id: "bad_decision",
+          shotId: "shot_404",
+          timeRange: { startMs: 0, endMs: 1000 },
+          pace: "teleport",
+        },
+      ],
+    }),
+  })
+  const director = createJianyingAiDirectorFromEditDecisionPlan({
+    timeline: readyTimeline,
+    fallbackPlan: baseDraftPlan.aiDirector,
+    editDecisionPlan: result.plan,
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.fallbackUsed, true)
+  assert.deepEqual(result.plan, fallbackEdp)
+  assert.deepEqual(director, baseDraftPlan.aiDirector)
+})
+
+test("DaVinci adapter capability is experimental and never blocks Jianying draft creation", async () => {
+  const { createDavinciExperimentAdapterStatus } = await importRenderingModule()
+  const unavailable = createDavinciExperimentAdapterStatus({
+    installed: false,
+    pythonApiAvailable: false,
+  })
+  const available = createDavinciExperimentAdapterStatus({
+    installed: true,
+    pythonApiAvailable: true,
+  })
+
+  assert.equal(unavailable.engineId, "davinci")
+  assert.equal(unavailable.status, "unavailable")
+  assert.equal(unavailable.experimental, true)
+  assert.equal(unavailable.blocksJianying, false)
+  assert.match(unavailable.message, /不影响剪映/)
+  assert.equal(available.status, "available")
+  assert.deepEqual(available.supportedDecisions, [
+    "timeline",
+    "transform_keyframes",
+    "subtitle",
+    "bgm_ducking",
+  ])
+})
+
 test("product board draft plan carries optional brand sticker overlays while non-product stays clean", async () => {
   const { createJianyingDraftPlan } = await importRenderingModule()
   const productPlan = createJianyingDraftPlan({

@@ -221,6 +221,17 @@ test("desktop Jianying export prefers native imported draft path when available"
   assert.match(source, /原生导入未完成/)
 })
 
+test("edit draft module lets users choose the native Jianying draft root", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /选择剪映草稿目录/)
+  assert.match(source, /jianyingDraftsRoot/)
+  assert.match(source, /selectJianyingDraftsRoot/)
+  assert.match(source, /window\.promptCenterDesktop\?\.selectJianyingDraftsRoot/)
+  assert.match(source, /desktopDraft\(\{[\s\S]*jianyingDraftsRoot/)
+  assert.match(source, /JianyingPro Drafts/)
+})
+
 test("single-shot regenerate remains queueable while image generation is running", async () => {
   const source = await readVideoPage()
 
@@ -275,7 +286,7 @@ test("task list can delete a task and clear its local cache without deleting Jia
   assert.match(source, /剪映草稿不会删除/)
 })
 
-test("video factory wires api profile failover into live text and image calls", async () => {
+test("video factory wires api profile failover into live text image and EDP calls", async () => {
   const source = await readVideoPage()
 
   assert.match(source, /createApiFailoverPlan/)
@@ -285,7 +296,8 @@ test("video factory wires api profile failover into live text and image calls", 
   assert.match(source, /createModuleFailoverPlan\(apiProfiles, "image_generation"\)/)
   assert.match(source, /createModuleFailoverPlan\(apiProfiles, "edit_director"\)/)
   assert.match(source, /requestAiDirectorGeneration/)
-  assert.match(source, /createModelAiDirectorPlan/)
+  assert.match(source, /createModelEditDecisionPlan/)
+  assert.match(source, /createJianyingAiDirectorFromEditDecisionPlan/)
   assert.match(source, /failedAttempts/)
   assert.match(source, /pauseReason/)
   assert.doesNotMatch(source, /message: .*apiKey/)
@@ -308,6 +320,18 @@ test("edit draft module exposes AI director controls and keeps editable draft as
   assert.match(source, /AI 剪辑决策/)
   assert.match(source, /createJianyingDraftPlan\({[\s\S]*aiDirectorPlan/)
   assert.match(source, /剪映可编辑草稿/)
+})
+
+test("edit draft module routes AI through EditDecisionPlan before Jianying adaptation", async () => {
+  const source = await readVideoPage()
+
+  assert.match(source, /buildEditDecisionGenerationRequest/)
+  assert.match(source, /createBasicEditDecisionPlan/)
+  assert.match(source, /createModelEditDecisionPlan/)
+  assert.match(source, /createJianyingAiDirectorFromEditDecisionPlan/)
+  assert.match(source, /editDecisionPlan/)
+  assert.match(source, /AI 精剪决策已写入统一 EDP/)
+  assert.doesNotMatch(source, /一键全自动生成/)
 })
 
 test("edit draft module keeps long AI director errors from breaking layout", async () => {

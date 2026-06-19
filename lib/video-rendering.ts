@@ -58,6 +58,13 @@ export type JianyingDraftDirectorClip = {
   replacementHint?: string
   transition?: string
   zoom?: "none" | "slow_in" | "slow_out" | "fast_in"
+  pace?: "fast" | "normal" | "slow" | "hold"
+  motion?: string
+  audioCue?: string
+  bgmDucking?: boolean
+  bRollStrategy?: string
+  subtitleStyle?: string
+  subtitleColor?: string
   emphasisSubtitle?: boolean
   text?: string
 }
@@ -103,6 +110,7 @@ export type JianyingDraftPlan = {
     trackOrder: string[]
     clips: JianyingDraftDirectorClip[]
   }
+  editDecisionPlan?: EditDecisionPlan
   materialAssets: JianyingDraftMaterialAsset[]
   brandOverlays: JianyingDraftBrandOverlay[]
   requiredConfirmations: JianyingDraftAction[]
@@ -137,6 +145,7 @@ export type CreateJianyingDraftPlanInput = {
   requestedActions?: JianyingDraftAction[]
   confirmedActions?: JianyingDraftAction[]
   aiDirectorPlan?: JianyingDraftPlan["aiDirector"]
+  editDecisionPlan?: EditDecisionPlan
   materialAssets?: JianyingDraftMaterialAsset[]
   copywritingBoard?: CopywritingBoardId
 }
@@ -185,6 +194,159 @@ export type BuildAiDirectorGenerationRequestInput = {
 export type CreateModelAiDirectorPlanInput = {
   fallbackPlan: JianyingDraftPlan["aiDirector"]
   modelText: string
+}
+
+export type EditDecisionPace = "fast" | "normal" | "slow" | "hold"
+
+export type EditDecisionVisualMotion = {
+  type: "zoom_in" | "zoom_out" | "pan_left" | "pan_right" | "shake" | "hold"
+  from?: number
+  to?: number
+  easing?: string
+}
+
+export type EditDecisionSubtitleEmphasis = {
+  text: string
+  style: "pop" | "scale" | "color" | "outline" | "word_by_word"
+  color?: "accent" | "warning" | "danger" | "white"
+  scale?: number
+}
+
+export type EditDecisionAudioCue = {
+  type: "hit" | "sfx" | "bgm_duck" | "silence" | "accent"
+  atMs: number
+  label?: string
+  durationMs?: number
+  volume?: number
+}
+
+export type EditDecisionBroll =
+  | {
+      strategy: "none"
+    }
+  | {
+      strategy: "reuse_existing"
+      assetId?: string
+      reason?: string
+    }
+  | {
+      strategy: "needs_new_broll"
+      reason: string
+    }
+
+export type EditDecisionQualityCheck = {
+  type:
+    | "pace"
+    | "blank_visual"
+    | "black_frame"
+    | "subtitle_sync"
+    | "video_track"
+    | "audio_track"
+    | "missing_asset"
+    | "aspect_ratio"
+    | "visual_direction_subtitle"
+    | "audio_overrun"
+    | "unknown_reference"
+  state: "pass" | "warning" | "failed"
+  message?: string
+}
+
+export type EditDecision = {
+  id: string
+  shotId: string
+  sentenceId?: string
+  timeRange: {
+    startMs: number
+    endMs: number
+  }
+  pace: EditDecisionPace
+  visualMotion: EditDecisionVisualMotion[]
+  transitionOut?: {
+    type: "hard_cut" | "soft_cut" | "flash_cut" | "push" | "wipe" | "black"
+    durationMs: number
+  }
+  subtitleEmphasis: EditDecisionSubtitleEmphasis[]
+  audioCues: EditDecisionAudioCue[]
+  bRoll: EditDecisionBroll
+}
+
+export type EditDecisionPlan = {
+  version: 1
+  taskId: string
+  style: string
+  targetEngine: "jianying" | "davinci" | "preview"
+  timelineDurationMs: number
+  decisions: EditDecision[]
+  qualityChecks: EditDecisionQualityCheck[]
+}
+
+export type CreateBasicEditDecisionPlanInput = {
+  taskId: string
+  timeline: VideoTimeline
+  style?: string
+  targetEngine?: EditDecisionPlan["targetEngine"]
+}
+
+export type CreateModelEditDecisionPlanInput = {
+  fallbackPlan: EditDecisionPlan
+  modelText: string
+}
+
+export type CreateModelEditDecisionPlanResult = {
+  ok: boolean
+  fallbackUsed: boolean
+  plan: EditDecisionPlan
+  error?: string
+}
+
+export type BuildEditDecisionGenerationRequestInput = {
+  profile: ApiProfileRequestContext
+  script: string
+  timeline: VideoTimeline
+  fallbackPlan: EditDecisionPlan
+  style?: string
+  targetEngine?: EditDecisionPlan["targetEngine"]
+  model?: string
+}
+
+export type EditDecisionGenerationRequest = {
+  endpoint: "/api/codex/chat/completions"
+  body: {
+    model: string
+    messages: Array<{ role: "system" | "user"; content: string }>
+    temperature: number
+    apiBaseUrl: string
+    apiKey: string
+    profileId: string
+  }
+  logEntry: {
+    kind: "edit_decision_generation_request"
+    profileId: string
+    apiBaseUrl: string
+    model: string
+    timelineClipCount: number
+    apiKey?: never
+  }
+}
+
+export type CreateJianyingAiDirectorFromEditDecisionPlanInput = {
+  timeline: VideoTimeline
+  fallbackPlan: JianyingDraftPlan["aiDirector"]
+  editDecisionPlan: EditDecisionPlan
+}
+
+export type DavinciExperimentAdapterStatus = {
+  engineId: "davinci"
+  status: "available" | "unavailable"
+  experimental: true
+  blocksJianying: false
+  message: string
+  supportedDecisions: string[]
+}
+
+export type CreateDavinciExperimentAdapterStatusInput = {
+  installed?: boolean
+  pythonApiAvailable?: boolean
 }
 
 const engineDefinitions: Array<Omit<RenderEngineOption, "status">> = [
@@ -275,6 +437,11 @@ function cleanText(value: unknown, fallback = "") {
   return text || fallback
 }
 
+function cleanOptionalText(value: unknown) {
+  const text = cleanText(value)
+  return text || undefined
+}
+
 function extractShotId(...values: unknown[]) {
   for (const value of values) {
     const match = String(value || "").match(/shot[_-]?(\d+)/iu)
@@ -291,6 +458,11 @@ function normalizeAssetKey(value: unknown) {
     .split("/")
     .pop()
     ?.replace(/_\d{8,}$/u, "") || ""
+}
+
+function cleanOptionalSegment(value: unknown) {
+  const cleaned = cleanSegment(value, "")
+  return cleaned || undefined
 }
 
 function isVisualDirectorClip(clip: JianyingDraftDirectorClip) {
@@ -639,6 +811,656 @@ function normalizeModelTransition(value: unknown, fallback?: string) {
     .slice(0, 48)
 }
 
+function normalizeMs(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value)
+  return Math.max(0, Math.floor(Number.isFinite(numberValue) ? numberValue : 0))
+}
+
+const editDecisionPaces = new Set<EditDecisionPace>([
+  "fast",
+  "normal",
+  "slow",
+  "hold",
+])
+
+const editDecisionMotionTypes = new Set<EditDecisionVisualMotion["type"]>([
+  "zoom_in",
+  "zoom_out",
+  "pan_left",
+  "pan_right",
+  "shake",
+  "hold",
+])
+
+const editDecisionTransitionTypes = new Set<
+  NonNullable<EditDecision["transitionOut"]>["type"]
+>(["hard_cut", "soft_cut", "flash_cut", "push", "wipe", "black"])
+
+const editDecisionSubtitleStyles = new Set<
+  EditDecisionSubtitleEmphasis["style"]
+>(["pop", "scale", "color", "outline", "word_by_word"])
+
+const editDecisionSubtitleColors = new Set<
+  NonNullable<EditDecisionSubtitleEmphasis["color"]>
+>(["accent", "warning", "danger", "white"])
+
+const editDecisionAudioCueTypes = new Set<EditDecisionAudioCue["type"]>([
+  "hit",
+  "sfx",
+  "bgm_duck",
+  "silence",
+  "accent",
+])
+
+const editDecisionBrollStrategies = new Set<EditDecisionBroll["strategy"]>([
+  "none",
+  "reuse_existing",
+  "needs_new_broll",
+])
+
+const editDecisionQualityCheckTypes = new Set<
+  EditDecisionQualityCheck["type"]
+>([
+  "pace",
+  "blank_visual",
+  "black_frame",
+  "subtitle_sync",
+  "video_track",
+  "audio_track",
+  "missing_asset",
+  "aspect_ratio",
+  "visual_direction_subtitle",
+  "audio_overrun",
+  "unknown_reference",
+])
+
+const editDecisionQualityStates = new Set<EditDecisionQualityCheck["state"]>([
+  "pass",
+  "warning",
+  "failed",
+])
+
+function visualTimelineClips(timeline: VideoTimeline) {
+  return timeline.tracks
+    .filter((track) => track.type === "visual" || track.id === "visual")
+    .flatMap((track) => track.clips)
+}
+
+function timelineShotIds(timeline: VideoTimeline) {
+  return new Set(
+    visualTimelineClips(timeline)
+      .map((clip) => extractShotId(clip.id, clip.assetId))
+      .filter(Boolean)
+  )
+}
+
+function createQualityChecks({
+  hasVisualTrack,
+  hasAudioTrack,
+}: {
+  hasVisualTrack: boolean
+  hasAudioTrack: boolean
+}): EditDecisionQualityCheck[] {
+  return [
+    {
+      type: "pace",
+      state: "pass",
+      message: "基础节奏已按分镜时间段生成。",
+    },
+    {
+      type: "blank_visual",
+      state: hasVisualTrack ? "pass" : "failed",
+      message: hasVisualTrack ? "未发现空镜。" : "缺少视频轨。",
+    },
+    {
+      type: "black_frame",
+      state: hasVisualTrack ? "pass" : "failed",
+      message: hasVisualTrack ? "未发现黑屏。" : "缺少可检查画面。",
+    },
+    {
+      type: "subtitle_sync",
+      state: "pass",
+      message: "字幕沿用基础时间线。",
+    },
+    {
+      type: "video_track",
+      state: hasVisualTrack ? "pass" : "failed",
+    },
+    {
+      type: "audio_track",
+      state: hasAudioTrack ? "pass" : "warning",
+      message: hasAudioTrack ? undefined : "未检测到配音轨，保留基础草稿。",
+    },
+    {
+      type: "missing_asset",
+      state: "pass",
+    },
+    {
+      type: "aspect_ratio",
+      state: "pass",
+    },
+    {
+      type: "visual_direction_subtitle",
+      state: "pass",
+    },
+    {
+      type: "audio_overrun",
+      state: "pass",
+    },
+    {
+      type: "unknown_reference",
+      state: "pass",
+    },
+  ]
+}
+
+export function createBasicEditDecisionPlan({
+  taskId,
+  timeline,
+  style = "basic_cut",
+  targetEngine = "jianying",
+}: CreateBasicEditDecisionPlanInput): EditDecisionPlan {
+  const visualClips = visualTimelineClips(timeline)
+  const hasAudioTrack = timeline.tracks.some(
+    (track) => (track.type === "voice" || track.type === "bgm") && track.clips.length
+  )
+
+  return {
+    version: 1,
+    taskId,
+    style,
+    targetEngine,
+    timelineDurationMs: Math.max(0, Math.floor(timeline.durationMs || 0)),
+    decisions: visualClips.map((clip, index) => {
+      const shotId =
+        extractShotId(clip.id, clip.assetId) ||
+        `shot_${String(index + 1).padStart(2, "0")}`
+      const startMs = normalizeMs(clip.startMs)
+      const endMs = startMs + normalizeMs(clip.durationMs)
+
+      return {
+        id: `decision_${String(index + 1).padStart(3, "0")}`,
+        shotId,
+        timeRange: { startMs, endMs },
+        pace: "normal",
+        visualMotion: [],
+        transitionOut: { type: "hard_cut", durationMs: 0 },
+        subtitleEmphasis: [],
+        audioCues: [],
+        bRoll: { strategy: "none" },
+      }
+    }),
+    qualityChecks: createQualityChecks({
+      hasVisualTrack: visualClips.length > 0,
+      hasAudioTrack,
+    }),
+  }
+}
+
+function parseEditDecisionTargetEngine(value: unknown) {
+  return value === "jianying" || value === "davinci" || value === "preview"
+    ? value
+    : null
+}
+
+function parseEditDecisionPace(value: unknown) {
+  return editDecisionPaces.has(value as EditDecisionPace)
+    ? (value as EditDecisionPace)
+    : null
+}
+
+function parseVisualMotion(value: unknown): EditDecisionVisualMotion | null {
+  if (!value || typeof value !== "object") return null
+  const type = (value as { type?: unknown }).type
+  if (!editDecisionMotionTypes.has(type as EditDecisionVisualMotion["type"])) {
+    return null
+  }
+
+  return {
+    type: type as EditDecisionVisualMotion["type"],
+    from:
+      typeof (value as { from?: unknown }).from === "number"
+        ? (value as { from: number }).from
+        : undefined,
+    to:
+      typeof (value as { to?: unknown }).to === "number"
+        ? (value as { to: number }).to
+        : undefined,
+    easing: cleanOptionalText((value as { easing?: unknown }).easing),
+  }
+}
+
+function parseSubtitleEmphasis(
+  value: unknown
+): EditDecisionSubtitleEmphasis | null {
+  if (!value || typeof value !== "object") return null
+  const text = cleanText((value as { text?: unknown }).text)
+  const style = (value as { style?: unknown }).style
+  if (!text || !editDecisionSubtitleStyles.has(style as EditDecisionSubtitleEmphasis["style"])) {
+    return null
+  }
+  const rawColor = (value as { color?: unknown }).color
+  const scale = Number((value as { scale?: unknown }).scale)
+
+  return {
+    text,
+    style: style as EditDecisionSubtitleEmphasis["style"],
+    color: editDecisionSubtitleColors.has(
+      rawColor as NonNullable<EditDecisionSubtitleEmphasis["color"]>
+    )
+      ? (rawColor as NonNullable<EditDecisionSubtitleEmphasis["color"]>)
+      : undefined,
+    scale: Number.isFinite(scale) && scale > 0 ? scale : undefined,
+  }
+}
+
+function parseAudioCue(value: unknown): EditDecisionAudioCue | null {
+  if (!value || typeof value !== "object") return null
+  const type = (value as { type?: unknown }).type
+  if (!editDecisionAudioCueTypes.has(type as EditDecisionAudioCue["type"])) {
+    return null
+  }
+
+  return {
+    type: type as EditDecisionAudioCue["type"],
+    atMs: normalizeMs((value as { atMs?: unknown }).atMs),
+    label: cleanOptionalText((value as { label?: unknown }).label),
+    durationMs:
+      (value as { durationMs?: unknown }).durationMs === undefined
+        ? undefined
+        : normalizeMs((value as { durationMs?: unknown }).durationMs),
+    volume:
+      typeof (value as { volume?: unknown }).volume === "number"
+        ? Math.max(0, Math.min(1, (value as { volume: number }).volume))
+        : undefined,
+  }
+}
+
+function parseBroll(value: unknown): EditDecisionBroll | null {
+  if (!value || typeof value !== "object") return { strategy: "none" }
+  const strategy = (value as { strategy?: unknown }).strategy
+  if (!editDecisionBrollStrategies.has(strategy as EditDecisionBroll["strategy"])) {
+    return null
+  }
+  if (strategy === "reuse_existing") {
+    return {
+      strategy,
+      assetId: cleanOptionalText((value as { assetId?: unknown }).assetId),
+      reason: cleanOptionalText((value as { reason?: unknown }).reason),
+    }
+  }
+  if (strategy === "needs_new_broll") {
+    const reason = cleanText((value as { reason?: unknown }).reason)
+    if (!reason) return null
+    return { strategy, reason }
+  }
+  return { strategy: "none" }
+}
+
+function parseQualityCheck(value: unknown): EditDecisionQualityCheck | null {
+  if (!value || typeof value !== "object") return null
+  const type = (value as { type?: unknown }).type
+  const state = (value as { state?: unknown }).state
+  if (
+    !editDecisionQualityCheckTypes.has(type as EditDecisionQualityCheck["type"]) ||
+    !editDecisionQualityStates.has(state as EditDecisionQualityCheck["state"])
+  ) {
+    return null
+  }
+
+  return {
+    type: type as EditDecisionQualityCheck["type"],
+    state: state as EditDecisionQualityCheck["state"],
+    message: cleanOptionalText((value as { message?: unknown }).message),
+  }
+}
+
+function parseEditDecision(
+  value: unknown,
+  knownShotIds: Set<string>
+): EditDecision | null {
+  if (!value || typeof value !== "object") return null
+  const raw = value as Record<string, unknown>
+  const id = cleanSegment(raw.id, "")
+  const shotId = cleanSegment(raw.shotId, "")
+  const pace = parseEditDecisionPace(raw.pace)
+  const timeRange =
+    raw.timeRange && typeof raw.timeRange === "object"
+      ? (raw.timeRange as { startMs?: unknown; endMs?: unknown })
+      : null
+  const startMs = normalizeMs(timeRange?.startMs)
+  const endMs = normalizeMs(timeRange?.endMs)
+
+  if (!id || !shotId || !knownShotIds.has(shotId) || !pace || endMs <= startMs) {
+    return null
+  }
+
+  const visualMotion = Array.isArray(raw.visualMotion)
+    ? raw.visualMotion.map(parseVisualMotion)
+    : []
+  const subtitleEmphasis = Array.isArray(raw.subtitleEmphasis)
+    ? raw.subtitleEmphasis.map(parseSubtitleEmphasis)
+    : []
+  const audioCues = Array.isArray(raw.audioCues) ? raw.audioCues.map(parseAudioCue) : []
+  if (
+    visualMotion.some((item) => !item) ||
+    subtitleEmphasis.some((item) => !item) ||
+    audioCues.some((item) => !item)
+  ) {
+    return null
+  }
+
+  const transitionOut =
+    raw.transitionOut && typeof raw.transitionOut === "object"
+      ? (raw.transitionOut as { type?: unknown; durationMs?: unknown })
+      : undefined
+  const transitionType = transitionOut?.type
+  const bRoll = parseBroll(raw.bRoll)
+  if (!bRoll) return null
+
+  return {
+    id,
+    shotId,
+    sentenceId: cleanOptionalSegment(raw.sentenceId),
+    timeRange: { startMs, endMs },
+    pace,
+    visualMotion: visualMotion as EditDecisionVisualMotion[],
+    transitionOut:
+      transitionOut &&
+      editDecisionTransitionTypes.has(
+        transitionType as NonNullable<EditDecision["transitionOut"]>["type"]
+      )
+        ? {
+            type: transitionType as NonNullable<EditDecision["transitionOut"]>["type"],
+            durationMs: normalizeMs(transitionOut.durationMs),
+          }
+        : undefined,
+    subtitleEmphasis: subtitleEmphasis as EditDecisionSubtitleEmphasis[],
+    audioCues: audioCues as EditDecisionAudioCue[],
+    bRoll,
+  }
+}
+
+function validateEditDecisionPlanShape(
+  parsed: unknown,
+  fallbackPlan: EditDecisionPlan
+): EditDecisionPlan | null {
+  if (!parsed || typeof parsed !== "object") return null
+  const raw = parsed as Record<string, unknown>
+  const targetEngine = parseEditDecisionTargetEngine(raw.targetEngine)
+  if (raw.version !== 1 || !targetEngine) return null
+  if (cleanText(raw.taskId) !== fallbackPlan.taskId) return null
+
+  const knownShotIds = new Set(fallbackPlan.decisions.map((decision) => decision.shotId))
+  const decisions = Array.isArray(raw.decisions)
+    ? raw.decisions.map((decision) => parseEditDecision(decision, knownShotIds))
+    : []
+  if (!decisions.length || decisions.some((decision) => !decision)) return null
+
+  const qualityChecks = Array.isArray(raw.qualityChecks)
+    ? raw.qualityChecks.map(parseQualityCheck)
+    : []
+  if (!qualityChecks.length || qualityChecks.some((check) => !check)) return null
+
+  return {
+    version: 1,
+    taskId: fallbackPlan.taskId,
+    style: cleanText(raw.style, fallbackPlan.style),
+    targetEngine,
+    timelineDurationMs: normalizeMs(raw.timelineDurationMs) || fallbackPlan.timelineDurationMs,
+    decisions: decisions as EditDecision[],
+    qualityChecks: qualityChecks as EditDecisionQualityCheck[],
+  }
+}
+
+export function createModelEditDecisionPlan({
+  fallbackPlan,
+  modelText,
+}: CreateModelEditDecisionPlanInput): CreateModelEditDecisionPlanResult {
+  const parsed = parseModelJson(modelText)
+  const plan = validateEditDecisionPlanShape(parsed, fallbackPlan)
+  if (!plan) {
+    return {
+      ok: false,
+      fallbackUsed: true,
+      plan: fallbackPlan,
+      error: "精剪决策模型输出非法，已回退基础剪辑。",
+    }
+  }
+
+  return {
+    ok: true,
+    fallbackUsed: false,
+    plan,
+  }
+}
+
+function findDecisionForClip(
+  clip: JianyingDraftDirectorClip,
+  editDecisionPlan: EditDecisionPlan
+) {
+  const shotId = extractShotId(clip.id, clip.assetId)
+  if (!shotId) return undefined
+  return editDecisionPlan.decisions.find((decision) => decision.shotId === shotId)
+}
+
+function findDecisionForSubtitleClip(
+  clip: JianyingDraftDirectorClip,
+  editDecisionPlan: EditDecisionPlan
+) {
+  const startMs = normalizeMs(clip.startMs)
+  const endMs = startMs + normalizeMs(clip.durationMs)
+
+  return editDecisionPlan.decisions.find((decision) => {
+    const overlapStart = Math.max(startMs, decision.timeRange.startMs)
+    const overlapEnd = Math.min(endMs, decision.timeRange.endMs)
+    return overlapEnd > overlapStart && decision.subtitleEmphasis.length > 0
+  })
+}
+
+function zoomForMotion(
+  decision: EditDecision,
+  fallback: JianyingDraftDirectorClip["zoom"]
+): JianyingDraftDirectorClip["zoom"] {
+  if (decision.pace === "fast") return "fast_in"
+  const motion = decision.visualMotion[0]
+  if (motion?.type === "zoom_in") return "fast_in"
+  if (motion?.type === "zoom_out") return "slow_out"
+  return fallback
+}
+
+function replacementHintForBroll(
+  bRoll: EditDecisionBroll,
+  fallback?: string
+) {
+  if (bRoll.strategy === "needs_new_broll") return bRoll.reason
+  if (bRoll.strategy === "reuse_existing" && bRoll.reason) return bRoll.reason
+  return fallback
+}
+
+function hasVisualEditDecisionEffect(decision: EditDecision) {
+  return (
+    decision.pace !== "normal" ||
+    decision.visualMotion.length > 0 ||
+    Boolean(
+      decision.transitionOut && decision.transitionOut.type !== "hard_cut"
+    ) ||
+    decision.audioCues.length > 0 ||
+    decision.bRoll.strategy !== "none"
+  )
+}
+
+export function createJianyingAiDirectorFromEditDecisionPlan({
+  fallbackPlan,
+  editDecisionPlan,
+}: CreateJianyingAiDirectorFromEditDecisionPlanInput): JianyingDraftPlan["aiDirector"] {
+  return {
+    ...fallbackPlan,
+    clips: fallbackPlan.clips.map((clip) => {
+      if (clip.locked) return clip
+      if (clip.type === "subtitle" || clip.trackId === "subtitle") {
+        const decision = findDecisionForSubtitleClip(clip, editDecisionPlan)
+        const emphasis = decision?.subtitleEmphasis[0]
+        if (!decision || !emphasis) return clip
+
+        return {
+          ...clip,
+          emphasisSubtitle: true,
+          subtitleStyle: emphasis.style,
+          subtitleColor: emphasis.color,
+        }
+      }
+      if (!isVisualDirectorClip(clip)) return clip
+
+      const decision = findDecisionForClip(clip, editDecisionPlan)
+      if (!decision) return clip
+      if (!hasVisualEditDecisionEffect(decision)) return clip
+      const firstMotion = decision.visualMotion[0]
+      const firstAudioCue = decision.audioCues.find((cue) => cue.type !== "bgm_duck")
+      const hasBgmDucking = decision.audioCues.some((cue) => cue.type === "bgm_duck")
+      const nextClip: JianyingDraftDirectorClip = {
+        ...clip,
+        pace: decision.pace,
+        transition: decision.transitionOut?.type || clip.transition,
+        zoom: zoomForMotion(decision, clip.zoom),
+      }
+      if (firstMotion?.type) nextClip.motion = firstMotion.type
+      const audioCue = firstAudioCue?.label || firstAudioCue?.type
+      if (audioCue) nextClip.audioCue = audioCue
+      if (hasBgmDucking) nextClip.bgmDucking = true
+      if (decision.bRoll.strategy !== "none") {
+        nextClip.bRollStrategy = decision.bRoll.strategy
+      }
+      const replacementHint = replacementHintForBroll(
+        decision.bRoll,
+        clip.replacementHint
+      )
+      if (replacementHint) nextClip.replacementHint = replacementHint
+
+      return nextClip
+    }),
+  }
+}
+
+export function buildEditDecisionGenerationRequest({
+  profile,
+  script,
+  timeline,
+  fallbackPlan,
+  style = fallbackPlan.style,
+  targetEngine = fallbackPlan.targetEngine,
+  model = profile.model,
+}: BuildEditDecisionGenerationRequestInput): EditDecisionGenerationRequest {
+  const clipCount = timeline.tracks.reduce(
+    (sum, track) => sum + track.clips.length,
+    0
+  )
+
+  return {
+    endpoint: "/api/codex/chat/completions",
+    body: {
+      model: cleanText(model, "edit-decision-default"),
+      temperature: 0.2,
+      apiBaseUrl: profile.apiBaseUrl,
+      apiKey: profile.apiKey,
+      profileId: profile.profileId,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是短视频精剪决策模型。只能输出统一中间格式 EditDecisionPlan JSON，不能直接写剪映、不得直接写剪映草稿，也不能直接写 DaVinci 工程。必须先描述快切/慢切、镜头推拉摇移/缩放、转场、音效、BGM 压低、字幕强调、B-roll 复用或补充，以及节奏、空镜、黑屏、字幕错位等质量检查。",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            script: cleanText(script),
+            style,
+            targetEngine,
+            VideoTimeline: timeline,
+            fallbackEditDecisionPlan: fallbackPlan,
+            outputSchema: {
+              version: 1,
+              taskId: fallbackPlan.taskId,
+              style,
+              targetEngine,
+              timelineDurationMs: timeline.durationMs,
+              decisions: [
+                {
+                  id: "decision_001",
+                  shotId: "shot_01",
+                  sentenceId: "optional sentence id",
+                  timeRange: { startMs: 0, endMs: 2800 },
+                  pace: "fast | normal | slow | hold",
+                  visualMotion: [
+                    {
+                      type: "zoom_in | zoom_out | pan_left | pan_right | shake | hold",
+                      from: 1,
+                      to: 1.08,
+                      easing: "easeOut",
+                    },
+                  ],
+                  transitionOut: {
+                    type: "hard_cut | soft_cut | flash_cut | push | wipe | black",
+                    durationMs: 120,
+                  },
+                  subtitleEmphasis: [
+                    {
+                      text: "关键词",
+                      style: "pop | scale | color | outline | word_by_word",
+                      color: "accent | warning | danger | white",
+                      scale: 1.18,
+                    },
+                  ],
+                  audioCues: [
+                    { type: "hit | sfx | bgm_duck | silence | accent", atMs: 600 },
+                  ],
+                  bRoll: {
+                    strategy: "none | reuse_existing | needs_new_broll",
+                    reason: "optional",
+                  },
+                },
+              ],
+              qualityChecks: [
+                { type: "pace", state: "pass" },
+                { type: "blank_visual", state: "pass" },
+                { type: "black_frame", state: "pass" },
+                { type: "subtitle_sync", state: "pass" },
+              ],
+            },
+          }),
+        },
+      ],
+    },
+    logEntry: {
+      kind: "edit_decision_generation_request",
+      profileId: profile.profileId,
+      apiBaseUrl: profile.apiBaseUrl,
+      model: cleanText(model, "edit-decision-default"),
+      timelineClipCount: clipCount,
+    },
+  }
+}
+
+export function createDavinciExperimentAdapterStatus({
+  installed = false,
+  pythonApiAvailable = false,
+}: CreateDavinciExperimentAdapterStatusInput = {}): DavinciExperimentAdapterStatus {
+  const available = installed && pythonApiAvailable
+
+  return {
+    engineId: "davinci",
+    status: available ? "available" : "unavailable",
+    experimental: true,
+    blocksJianying: false,
+    message: available
+      ? "DaVinci 实验适配器可用，可从 EDP 探测时间线、关键帧和音频能力。"
+      : "DaVinci 实验适配器不可用，仅记录能力状态，不影响剪映默认流程。",
+    supportedDecisions: available
+      ? ["timeline", "transform_keyframes", "subtitle", "bgm_ducking"]
+      : [],
+  }
+}
+
 export function createModelAiDirectorPlan({
   fallbackPlan,
   modelText,
@@ -824,6 +1646,7 @@ export function createJianyingDraftPlan({
   requestedActions = [],
   confirmedActions = [],
   aiDirectorPlan,
+  editDecisionPlan,
   materialAssets = [],
   copywritingBoard = "generic_rewrite",
 }: CreateJianyingDraftPlanInput): JianyingDraftPlan {
@@ -843,6 +1666,20 @@ export function createJianyingDraftPlan({
     copywritingBoard,
     materialAssets,
   })
+  const baseAiDirector =
+    aiDirectorPlan ||
+    createDirectorPlan({
+      timeline,
+      lockedShotIds,
+      lockedTrackIds,
+    })
+  const adaptedAiDirector = editDecisionPlan
+    ? createJianyingAiDirectorFromEditDecisionPlan({
+        timeline,
+        fallbackPlan: baseAiDirector,
+        editDecisionPlan,
+      })
+    : baseAiDirector
 
   return {
     taskId,
@@ -862,15 +1699,8 @@ export function createJianyingDraftPlan({
         : status === "needs_confirmation"
           ? `需要用户确认：${requiredConfirmations.join("、")}`
           : "剪映可编辑草稿计划已准备，默认不会导出 MP4。",
-    aiDirector: reconcileDirectorMaterialRefs(
-      aiDirectorPlan ||
-        createDirectorPlan({
-          timeline,
-          lockedShotIds,
-          lockedTrackIds,
-        }),
-      materialAssets
-    ),
+    aiDirector: reconcileDirectorMaterialRefs(adaptedAiDirector, materialAssets),
+    editDecisionPlan,
     materialAssets,
     brandOverlays,
     requiredConfirmations,
